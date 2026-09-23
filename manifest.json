@@ -1,14 +1,14 @@
 {
-	"id": "ait",
+	"id": "ai-for-Templater",
 	"name": "AI for Templater (new)",
-	"version": "1.0.20",
+	"version": "1.0.30",
 	"minAppVersion": "1.9.14",
 	"description": "AI Extension for the Templater plugin.",
 	"author": "Emphity",
-	"authorUrl": "https://tfthacker.com/",
+	"authorUrl": "https://github.com/Emphity",
 	"helpUrl": "https://tfthacker.com/AIT",
 	"isDesktopOnly": false,
 	"fundingUrl": {
-		"Sponsor my work": "https://tfthacker.com/sponsor"
+		"Sponsor my work": ""
 	}
 }

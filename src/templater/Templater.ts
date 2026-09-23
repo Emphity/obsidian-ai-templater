@@ -31,7 +31,7 @@ export const initializeTemplaterInternalModule = async (
 				plugin.app as App & { plugins: ObsidianPlugins }
 			).plugins.getPlugin("templater-obsidian") as TemplaterPluginLike;
 			if (templater) {
-				clearInterval(intervalId);
+				activeWindow.clearInterval(intervalId);
 				const internal_module = new InternalModuleAit(templater);
 				internal_module.setPlugin(plugin);
 
@@ -56,7 +56,7 @@ export const initializeTemplaterInternalModule = async (
 						}
 					});
 			} else if (retries === 0) {
-				clearInterval(intervalId);
+				activeWindow.clearInterval(intervalId);
 				reject(new Error("Templater plugin not found after 30 seconds"));
 			} else {
 				retries--;
@@ -71,7 +71,7 @@ export const trackTemplater = (plugin: AitPlugin): void => {
 			enablePlugin(oldMethod: (id: string) => Promise<void>) {
 				return async function (this: unknown, pluginId: string) {
 					if (pluginId === "templater-obsidian") {
-						setTimeout(async () => {
+						activeWindow.setTimeout(async () => {
 							if (window.ait?.plugin)
 								window.ait.plugin.internalModuleAit =
 									await initializeTemplaterInternalModule(window.ait.plugin);

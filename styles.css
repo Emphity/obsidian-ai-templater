@@ -3,8 +3,8 @@
 	width: 300px;
 }
 
-.ait-settings .setting-item-control {
-	width: 50% !important;
+.settings-tab .ait-settings .setting-item-control {
+    width: 50%;
 }
 
 .ait-settings .setting-item-control input,
@@ -37,8 +37,8 @@
 	padding: var(--size-2-2) var(--size-2-3);
 }
 
-.ait-saved-list-input .setting-item-control {
-	width: 100% !important;
+.settings-tab .ait-settings .setting-item-control {
+	width: 100%;
 }
 
 .ait-saved-list-input .setting-item-control input {

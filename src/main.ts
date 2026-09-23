@@ -36,7 +36,7 @@ export default class AitPlugin extends Plugin {
 	unlockKey: CryptoKey | null = null;
 
 	async onload() {
-		console.log(`loading ${this.APP_NAME}`);
+		new Notice(`loading ${this.APP_NAME}`);
 		await this.loadSettings();
 		this.addSettingTab(new OWlSettingTab(this.app, this));
 		this.openAiApi = new OpenAiApi(this);
@@ -63,7 +63,7 @@ export default class AitPlugin extends Plugin {
 	}
 
 	onunload() {
-		console.log(`unloading ${this.APP_NAME}`);
+		new Notice(`unloading ${this.APP_NAME}`);
 	}
 
 	async loadSettings(): Promise<void> {
