@@ -23,12 +23,12 @@ Works with OpenAI API compatible endpoints.
 
 ### Examples
 Append the response directly on the note:
-```
+```javascript
 <% tR += await tp.ai.chat('What should I ask myself today?') %>
 ```
 
 Assign the response to a const:
-```
+```javascript
 <%* const response = await tp.ai.chat('Say a gigachad phrase to write in a poster') 
 tR += '> ' + response -%>
 ```
