@@ -2,18 +2,16 @@
 
 This plugin extends Templater to interact with large language models. It is primarily designed to work with OpenAI LLMs, like the ones used by ChatGPT, but is also compatible with any LLM that supports the OpenAI API.
 
-For example, in Templater, you can use the following command to ask ChatGPT a question:
+For example, in Templater, you can use the following command to ask your selected provider's model a question:
 
 `<%tp.ai.chat("How far is the moon from the earth?")%>`
 
 For detailed instructions on the use of this plugin, please see: [https://tfthacker.com/AIT]
 
-Please note that this plugin requires an API key from OpenAI. You can get one by signing up at [https://beta.openai.com/signup/].
+Works with any OpenAI API compatible endpoint. 
 
-Additionally, when you use this plugin, unless you have configured it to use a local LLM, it will make internet requests to the OpenAI API. Please be aware of this when using this plugin.
+## Ways to connect with the creator and more information on his work
 
-## Ways to connect with me and more information on my work
+You can find him on Twitter [@TfTHacker](https://x.com/TfTHacker)
 
-You can find me on Twitter [@TfTHacker](https://x.com/TfTHacker)
-
-My website https://tfthacker.com/
+His website https://tfthacker.com/

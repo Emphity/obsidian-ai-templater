@@ -8,7 +8,11 @@ bun.lockb
 
 # build
 build
+main.js
 *.js.map
+
+# vault data (contains API keys, never share)
+data.json
 
 # other
 **/.DS_Store

@@ -1,7 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
-import fs from "fs";
 import console from "console";
 
 const prod = process.argv[2] === "production";
@@ -22,6 +21,7 @@ process.emit = function (name, data, ...args) {
 
 const context = await esbuild.context({
 	entryPoints: ["src/main.ts"],
+	tsconfig: "tsconfig.build.json",
 	bundle: true,
 	external: [
 		"obsidian",
@@ -44,7 +44,7 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	outfile: "build/main.js",
+	outfile: "main.js",
 });
 
 if (prod) {
@@ -52,11 +52,5 @@ if (prod) {
 	await context.rebuild();
 	process.exit(0);
 } else {
-	fs.copyFile("manifest.json", "build/manifest.json", (err) => {
-		if (err) console.log(err);
-	});
-	fs.copyFile("styles.css", "build/styles.css", (err) => {
-		if (err) console.log(err);
-	});
 	await context.watch();
 }

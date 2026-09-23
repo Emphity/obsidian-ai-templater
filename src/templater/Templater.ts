@@ -1,9 +1,25 @@
 // Utility functions for interacting with the Templater plugin
 
-/* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- calling external library */
 import { around } from "monkey-around";
+import type { App } from "obsidian";
 import type AitPlugin from "../main";
 import { InternalModuleAit } from "./InternalModuleAit";
+
+type ObsidianPlugins = {
+	enablePlugin: (id: string) => Promise<void>;
+	disablePlugin: (id: string) => Promise<void>;
+	getPlugin: (id: string) => unknown;
+};
+
+type TemplaterPluginLike = {
+	templater: {
+		functions_generator: {
+			internal_functions: {
+				modules_array: unknown[];
+			};
+		};
+	};
+};
 
 export const initializeTemplaterInternalModule = async (
 	plugin: AitPlugin,
@@ -11,7 +27,9 @@ export const initializeTemplaterInternalModule = async (
 	return new Promise((resolve, reject) => {
 		let retries = 30;
 		const intervalId = setInterval(() => {
-			const templater = plugin.app.plugins.getPlugin("templater-obsidian");
+			const templater = (
+				plugin.app as App & { plugins: ObsidianPlugins }
+			).plugins.getPlugin("templater-obsidian") as TemplaterPluginLike;
 			if (templater) {
 				clearInterval(intervalId);
 				const internal_module = new InternalModuleAit(templater);
@@ -49,27 +67,24 @@ export const initializeTemplaterInternalModule = async (
 
 export const trackTemplater = (plugin: AitPlugin): void => {
 	plugin.register(
-		around(plugin.app.plugins, {
-			enablePlugin(oldMethod) {
-				return async function (pluginId) {
+		around((plugin.app as App & { plugins: ObsidianPlugins }).plugins, {
+			enablePlugin(oldMethod: (id: string) => Promise<void>) {
+				return async function (this: unknown, pluginId: string) {
 					if (pluginId === "templater-obsidian") {
-						// eslint-disable-next-line @typescript-eslint/no-misused-promises -- setTimeout needs to be called async
 						setTimeout(async () => {
 							if (window.ait?.plugin)
 								window.ait.plugin.internalModuleAit =
 									await initializeTemplaterInternalModule(window.ait.plugin);
 						}, 1000);
 					}
-					// @ts-expect-error - monkey-around ignore this
 					return oldMethod.call(this, pluginId);
 				};
 			},
-			disablePlugin(oldMethod) {
-				return async function (pluginId) {
+			disablePlugin(oldMethod: (id: string) => Promise<void>) {
+				return async function (this: unknown, pluginId: string) {
 					if (pluginId === "templater-obsidian") {
 						if (window.ait?.plugin) window.ait.plugin.internalModuleAit = null;
 					}
-					// @ts-expect-error - monkey-around ignore this
 					return oldMethod.call(this, pluginId);
 				};
 			},

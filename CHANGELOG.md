@@ -1,3 +1,13 @@
+# 1.0.30
+### Updates
+- Endpoint and model are now selected from dropdown lists in Settings, so there is no need to type them by hand when switching setups.
+- Endpoints support aliases (display names) and a per-endpoint API key; switching endpoints automatically loads the key saved for that endpoint. Legacy single-key settings are migrated on load.
+- Fetch available models from the endpoint (refresh button next to the Model setting); the list is cached per endpoint. Manual models are preserved on refresh. The API key is optional: it is sent when configured, and requests go without credentials otherwise (e.g. Ollama/LM Studio).
+- API keys are now encrypted at rest (AES-GCM 256 + PBKDF2-SHA256 via Web Crypto, no dependencies) with a versioned blob `enc:v1:<salt>:<iv>:<ciphertext>`. Includes an unlock modal on plugin load (plus an "Unlock API keys" command) and automatic migration of plaintext keys. While locked, chat/model fetch requests are sent without the key and the API Key setting is disabled. Debug logs no longer dump the full client.
+- Fetch available models from the endpoint once and cache them, with a manual refresh button next to the Model setting. The API key is optional: it is sent when configured, and requests go without credentials otherwise (e.g. Ollama/LM Studio).
+- Max tokens per request: per-model maximum with priority cascade. Model limits reported by the endpoint (`top_provider.max_completion_tokens`, `context_length`, `max_context_length`, `context_window`) are captured on refresh (OpenRouter includes them; OpenAI/Ollama do not). Resolution order when sending: template `maxTokens` (4th param of `tp.ai.chat`) > manual Max tokens per request (>0) > detected model maximum > omit `max_completion_tokens` (provider decides). The setting accepts 0 = auto, and the model list in Settings shows the detected maximum per model ("N tokens (detected)").
+- Works with Opencode.
+
 # 1.0.20
 ### Updates
 - automated release

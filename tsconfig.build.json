@@ -11,10 +11,6 @@
 		"importHelpers": true,
 		"isolatedModules": true,
 		"strictNullChecks": true,
-		"lib": ["es2022", "DOM", "ES5", "ES6", "ES7"],
-		"paths": {
-			"templater-obsidian/src/*": ["./src/types/templater/src/*"]
-		}
-	},
-	"include": ["src/**/*.ts"]
+		"lib": ["es2022", "DOM", "ES5", "ES6", "ES7"]
+	}
 }
