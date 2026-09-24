@@ -9,7 +9,7 @@ import type AitPlugin from "../main";
 import { decrypt, isEncrypted } from "../utils/Crypto";
 import { promotionalLinks } from "./Promotional";
 import type { SavedModelList } from "./settings";
-import { mergeModels, savedModelListFor } from "./settings";
+import { manualMaxTokensFor, mergeModels, savedModelListFor } from "./settings";
 
 interface SelectableListEntry {
 	value: string;
@@ -39,6 +39,11 @@ interface SelectableListConfig {
 	setValue: (value: string) => Promise<void>;
 	getSavedEntries: () => SelectableListEntry[];
 	setSavedEntries: (entries: SelectableListEntry[]) => Promise<void>;
+	// when set, the edit form includes an informational "Max tokens" field
+	maxTokens?: {
+		getFor: (model: string) => number | undefined;
+		setFor: (model: string, maxTokens: number | undefined) => Promise<void>;
+	};
 }
 
 export class OWlSettingTab extends PluginSettingTab {
@@ -114,6 +119,21 @@ export class OWlSettingTab extends PluginSettingTab {
 				this.plugin.settings.defaultModel = value;
 				await this.plugin.saveSettings();
 			},
+			maxTokens: {
+				getFor: (model) =>
+					manualMaxTokensFor(
+						this.plugin.settings.savedModels,
+						this.plugin.settings.defaultEndpoint || "",
+						model,
+					),
+				setFor: async (model, maxTokens) => {
+					await this.plugin.saveManualMaxTokens(
+						this.plugin.settings.defaultEndpoint || "",
+						model,
+						maxTokens,
+					);
+				},
+			},
 			getSavedEntries: () => {
 				const list = savedModelListFor(
 					this.plugin.settings.savedModels,
@@ -121,15 +141,22 @@ export class OWlSettingTab extends PluginSettingTab {
 				);
 				return (list?.models ?? [])
 					.map((value) => {
+						const manual = manualMaxTokensFor(
+							this.plugin.settings.savedModels,
+							this.plugin.settings.defaultEndpoint || "",
+							value,
+						);
 						const detected = this.plugin.detectedMaxTokensFor(
 							this.plugin.settings.defaultEndpoint || "",
 							value,
 						);
 						return {
 							value,
-							hint: detected
-								? `${detected.toString()} tokens (detected)`
-								: undefined,
+							hint: manual
+								? `${manual.toString()} tokens (manual)`
+								: detected
+									? `${detected.toString()} tokens (detected)`
+									: undefined,
 						};
 					})
 					.reduce<SelectableListEntry[]>((unique, entry) => {
@@ -393,6 +420,7 @@ export class OWlSettingTab extends PluginSettingTab {
 		let aliasInput: TextComponent | undefined;
 		let valueInput: TextComponent | undefined;
 		let apiKeyInput: TextComponent | undefined;
+		let maxTokensInput: TextComponent | undefined;
 		let saveButton: ButtonComponent | undefined;
 		let editingValue: string | undefined;
 		let inputsShown = false;
@@ -407,6 +435,7 @@ export class OWlSettingTab extends PluginSettingTab {
 				aliasInput?.setValue("");
 				valueInput?.setValue("");
 				apiKeyInput?.setValue("");
+				maxTokensInput?.setValue("");
 			}
 			toggleButton?.setIcon(visible ? "x" : "plus");
 		};
@@ -437,6 +466,13 @@ export class OWlSettingTab extends PluginSettingTab {
 						text.setPlaceholder("Locked — unlock to edit API keys");
 					}
 				}
+			});
+		}
+		if (config.maxTokens) {
+			inputSetting.addText((text) => {
+				maxTokensInput = text;
+				text.setPlaceholder("Max tokens (optional)");
+				text.inputEl.addClass("ait-input-maxtokens");
 			});
 		}
 		inputSetting.addButton((button) => {
@@ -476,6 +512,14 @@ export class OWlSettingTab extends PluginSettingTab {
 				if (config.getValue() === editingValue || config.getValue() === value) {
 					await config.setValue(value);
 				}
+				if (config.maxTokens) {
+					const parsed = Number.parseInt(
+						maxTokensInput?.getValue().trim() ?? "",
+						10,
+					);
+					// empty/invalid clears the stored value; positive numbers persist
+					await config.maxTokens.setFor(value, parsed > 0 ? parsed : undefined);
+				}
 				editingValue = undefined;
 				if (saveButton) saveButton.setButtonText("Save");
 				setInputsVisible(false);
@@ -487,6 +531,11 @@ export class OWlSettingTab extends PluginSettingTab {
 			editingValue = entry.value;
 			aliasInput?.setValue(entry.alias ?? "");
 			valueInput?.setValue(entry.value);
+			if (config.maxTokens) {
+				maxTokensInput?.setValue(
+					config.maxTokens.getFor(entry.value)?.toString() ?? "",
+				);
+			}
 			if (entry.apiKey && isEncrypted(entry.apiKey)) {
 				if (this.plugin.isUnlocked()) {
 					void decrypt(entry.apiKey, this.plugin.unlockKey as CryptoKey).then(

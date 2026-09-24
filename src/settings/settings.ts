@@ -12,7 +12,18 @@ export interface SavedModelList {
 	// token limits per model id, when the endpoint reports them
 	// (e.g. OpenRouter's context_length / top_provider.max_completion_tokens)
 	limits?: Record<string, ModelLimit>;
+	// max tokens per model id entered manually in settings (informational,
+	// useful when the endpoint does not report the limits itself)
+	manualLimits?: Record<string, number>;
 }
+
+// manual max tokens edited by the user for a model in settings, when any
+export const manualMaxTokensFor = (
+	lists: SavedModelList[],
+	endpoint: string,
+	model: string,
+): number | undefined =>
+	savedModelListFor(lists, endpoint)?.manualLimits?.[model];
 
 // token limits for a single model as reported by the endpoint
 export interface ModelLimit {

@@ -23,6 +23,52 @@ import { PasswordModal } from "./utils/PasswordModal";
 
 const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1/";
 
+// keeps only valid entries of a persisted limits record
+const sanitizeLimits = (raw: unknown): Record<string, ModelLimit> => {
+	const result: Record<string, ModelLimit> = {};
+	const positive = (value: unknown): number | undefined =>
+		typeof value === "number" && Number.isFinite(value) && value > 0
+			? value
+			: undefined;
+	if (typeof raw === "object" && raw !== null) {
+		for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+			if (typeof key === "string" && key && typeof value === "object") {
+				const limit = value as {
+					contextLength?: unknown;
+					maxCompletionTokens?: unknown;
+					fetchedAt?: unknown;
+				};
+				result[key] = {
+					contextLength: positive(limit.contextLength),
+					maxCompletionTokens: positive(limit.maxCompletionTokens),
+					fetchedAt:
+						typeof limit.fetchedAt === "number" ? limit.fetchedAt : undefined,
+				};
+			}
+		}
+	}
+	return result;
+};
+
+// keeps only the manual max token values persisted from the settings UI
+const sanitizeManualLimits = (raw: unknown): Record<string, number> => {
+	const result: Record<string, number> = {};
+	if (typeof raw === "object" && raw !== null) {
+		for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+			if (
+				typeof key === "string" &&
+				key &&
+				typeof value === "number" &&
+				Number.isFinite(value) &&
+				value > 0
+			) {
+				result[key] = value;
+			}
+		}
+	}
+	return result;
+};
+
 export default class AitPlugin extends Plugin {
 	APP_NAME = this.manifest.name;
 	APP_ID = this.manifest.id;
@@ -115,6 +161,8 @@ export default class AitPlugin extends Plugin {
 						endpoint?: unknown;
 						models?: unknown;
 						fetchedAt?: unknown;
+						limits?: unknown;
+						manualLimits?: unknown;
 					};
 					if (
 						typeof entry.endpoint === "string" &&
@@ -128,12 +176,28 @@ export default class AitPlugin extends Plugin {
 								),
 							),
 						];
+						const sanitizedLimits = sanitizeLimits(entry.limits);
+						const sanitizedManualLimits = sanitizeManualLimits(
+							entry.manualLimits,
+						);
+						const hasExtraData =
+							Object.keys(sanitizedLimits).length > 0 ||
+							Object.keys(sanitizedManualLimits).length > 0;
 						if (modelLists.some((list) => list.endpoint === entry.endpoint)) {
 							const existing = modelLists.find(
 								(list) => list.endpoint === entry.endpoint,
 							);
 							if (existing) {
 								existing.models = mergeModels(existing.models, models);
+								existing.limits = hasExtraData
+									? { ...(existing.limits ?? {}), ...sanitizedLimits }
+									: existing.limits;
+								existing.manualLimits = hasExtraData
+									? {
+											...(existing.manualLimits ?? {}),
+											...sanitizedManualLimits,
+										}
+									: existing.manualLimits;
 							}
 						} else {
 							modelLists.push({
@@ -143,6 +207,10 @@ export default class AitPlugin extends Plugin {
 									typeof entry.fetchedAt === "number"
 										? entry.fetchedAt
 										: undefined,
+								...(hasExtraData && {
+									limits: sanitizedLimits,
+									manualLimits: sanitizedManualLimits,
+								}),
 							});
 						}
 					}
@@ -363,6 +431,33 @@ export default class AitPlugin extends Plugin {
 			this.settings.savedModels.push(list);
 		}
 		list.limits = { ...(list.limits ?? {}), ...limits };
+		await this.saveSettings();
+	}
+
+	// stores the manually entered max token value for a model on the active
+	// endpoint (informational only). Passing undefined removes the entry.
+	async saveManualMaxTokens(
+		endpoint: string,
+		model: string,
+		maxTokens: number | undefined,
+	): Promise<void> {
+		if (!endpoint || !model) return;
+		const existing = savedModelListFor(this.settings.savedModels, endpoint);
+		if (!existing) {
+			if (maxTokens === undefined) return;
+			this.settings.savedModels.push({
+				endpoint,
+				models: [model],
+				manualLimits: { [model]: maxTokens },
+			});
+		} else {
+			existing.manualLimits = { ...(existing.manualLimits ?? {}) };
+			if (maxTokens === undefined) {
+				delete existing.manualLimits[model];
+			} else {
+				existing.manualLimits[model] = maxTokens;
+			}
+		}
 		await this.saveSettings();
 	}
 

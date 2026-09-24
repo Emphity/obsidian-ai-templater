@@ -58,6 +58,10 @@
 	flex: 2 1 160px;
 }
 
+.ait-saved-list-input .ait-input-maxtokens {
+	flex: 1 1 120px;
+}
+
 .ait-saved-list-texts {
 	flex: 1;
 	min-width: 0;
