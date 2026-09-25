@@ -29,6 +29,7 @@
 		"typescript": "6.0.2"
 	},
 	"dependencies": {
+		"@anthropic-ai/sdk": "^0.128.0",
 		"openai": "^6.3.0"
 	}
 }

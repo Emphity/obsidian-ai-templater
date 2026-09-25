@@ -62,6 +62,11 @@
 	flex: 1 1 120px;
 }
 
+.ait-saved-list-input .ait-input-apitype {
+	flex: 1 1 140px;
+	min-width: 0;
+}
+
 .ait-saved-list-texts {
 	flex: 1;
 	min-width: 0;

@@ -1,8 +1,36 @@
+// API dialect selection stored per endpoint; "auto" inspects the URL
+// (api.anthropic.com => Anthropic, anything else => OpenAI-compatible)
+export type ApiTypeSetting = "auto" | "openai" | "anthropic";
+
+export const API_TYPE_OPTIONS: ApiTypeSetting[] = [
+	"auto",
+	"openai",
+	"anthropic",
+];
+
+export const API_TYPE_LABELS: Record<ApiTypeSetting, string> = {
+	auto: "Auto-detect",
+	openai: "OpenAI compatible",
+	anthropic: "Anthropic",
+};
+
+// accepts only the three known values; anything else falls back to "auto"
+export const sanitizeApiType = (value: unknown): ApiTypeSetting =>
+	value === "openai" || value === "anthropic" ? value : "auto";
+
 export interface SavedEndpoint {
 	value: string;
 	alias: string;
 	apiKey: string;
+	apiType: ApiTypeSetting;
 }
+
+// stored api type for an endpoint ("auto" when absent)
+export const apiTypeForEndpoint = (
+	endpoints: SavedEndpoint[],
+	endpoint: string,
+): ApiTypeSetting =>
+	endpoints.find((entry) => entry.value === endpoint)?.apiType ?? "auto";
 
 // models fetched from an endpoint (or added manually), keyed by endpoint URL
 export interface SavedModelList {

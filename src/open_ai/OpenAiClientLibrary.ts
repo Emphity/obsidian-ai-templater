@@ -1,47 +1,34 @@
-// This module takes care of all communication with the OpenAI Client Library
+// This module takes care of all communication with the AI providers. Requests
+// go either to OpenAI-compatible endpoints (OpenAI, OpenRouter, Ollama, LM
+// Studio, OpenCode...) through the OpenAI client library, or to native
+// Anthropic endpoints through the Anthropic client library, selected per
+// endpoint (see src/api/provider.ts)
 // https://platform.openai.com/docs/api-reference
+// https://docs.anthropic.com/en/api/messages
 
-import { Notice, Platform, requestUrl } from "obsidian";
-import type { ClientOptions } from "openai";
+import type { ClientOptions as AnthropicClientOptions } from "@anthropic-ai/sdk";
+import { Anthropic } from "@anthropic-ai/sdk";
+import { Notice, Platform } from "obsidian";
+import type { ClientOptions as OpenAiClientOptions } from "openai";
 import { OpenAI } from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources";
+import {
+	anthropicToSimpleCompletion,
+	messagesToAnthropic,
+} from "../api/anthropicAdapter";
+import { obsidianFetch } from "../api/obsidianFetch";
+import type { ApiProvider } from "../api/provider";
+import {
+	ANTHROPIC_OAUTH_BETA,
+	DEFAULT_ANTHROPIC_MAX_TOKENS,
+	isAnthropicOAuthKey,
+	normalizeAnthropicBaseURL,
+	providerForEndpoint,
+} from "../api/provider";
+import type { SimpleChatCompletion } from "../api/types";
 import type AitPlugin from "../main";
 import type { ModelLimit } from "../settings/settings";
-
-// fetch implementation backed by Obsidian's requestUrl, which performs the
-// request from the main process and is not subject to CORS restrictions
-const obsidianFetch = async (
-	input: string | URL | Request,
-	init?: RequestInit,
-): Promise<Response> => {
-	const body = init?.body;
-	if (body !== undefined && typeof body !== "string") {
-		return globalThis.fetch(input, init);
-	}
-	const url =
-		typeof input === "string"
-			? input
-			: input instanceof URL
-				? input.toString()
-				: input.url;
-	const headers: Record<string, string> = {};
-	if (init?.headers) {
-		for (const [key, value] of new Headers(init.headers).entries()) {
-			headers[key] = value;
-		}
-	}
-	const response = await requestUrl({
-		url,
-		method: init?.method ?? "GET",
-		headers,
-		body: body as string | undefined,
-		throw: false,
-	});
-	return new Response(response.text, {
-		status: response.status,
-		headers: response.headers,
-	});
-};
+import { apiTypeForEndpoint } from "../settings/settings";
 
 // session identifier sent as x-opencode-session, generated once per plugin
 // load as required by OpenCode Go (https://opencode.ai/docs/go/)
@@ -91,12 +78,45 @@ const extractLimit = (raw: unknown): ModelLimit | undefined => {
 	return { maxCompletionTokens, contextLength, fetchedAt: Date.now() };
 };
 
+// maps an OpenAI chat completion into the provider-agnostic shape shared by
+// the debug logging and the token usage notice
+const openAiToSimpleCompletion = (completion: {
+	choices?: { message?: { content?: string | null } }[];
+	usage?: {
+		prompt_tokens?: number;
+		completion_tokens?: number;
+		total_tokens?: number;
+	} | null;
+	model?: string;
+}): SimpleChatCompletion => {
+	const usage = completion.usage
+		? {
+				prompt_tokens: completion.usage.prompt_tokens ?? 0,
+				completion_tokens: completion.usage.completion_tokens ?? 0,
+				total_tokens: completion.usage.total_tokens ?? 0,
+			}
+		: undefined;
+	return {
+		content: completion.choices?.[0]?.message?.content ?? "",
+		usage,
+		model: completion.model,
+	};
+};
+
 export default class OpenAiApi {
 	private plugin: AitPlugin;
 
 	constructor(plugin: AitPlugin) {
 		this.plugin = plugin;
 	}
+
+	// resolves the API dialect for an endpoint: the per-endpoint setting wins,
+	// otherwise the hostname decides (api.anthropic.com => Anthropic)
+	private resolveProvider = (baseURL: string): ApiProvider =>
+		providerForEndpoint(
+			baseURL,
+			apiTypeForEndpoint(this.plugin.settings.savedEndpoints, baseURL),
+		);
 
 	// creates the OpenAI client with the Obsidian fetch wrapper and the
 	// client identification headers required by OpenCode Go
@@ -112,21 +132,50 @@ export default class OpenAiApi {
 			dangerouslyAllowBrowser: true,
 			fetch: obsidianFetch,
 			defaultHeaders,
-		} as ClientOptions);
+		} as OpenAiClientOptions);
 	};
 
-	// validates the current settings (API Key, Endpoint and Model)
-	validateSettings = (): boolean => {
-		if (!this.plugin.settings.defaultEndpoint) {
-			this.plugin.log("validateSettings", "defaultEndpoint is not set");
+	// creates the Anthropic client with the Obsidian fetch wrapper; OAuth
+	// access tokens authenticate via Authorization header and require the
+	// oauth beta flag instead of x-api-key
+	private createAnthropicClient = (
+		apiKey: string,
+		baseURL: string,
+	): Anthropic => {
+		const defaultHeaders: Record<string, string> = {
+			"User-Agent": `${this.plugin.manifest.id}/${this.plugin.manifest.version}`,
+		};
+		const options: AnthropicClientOptions = {
+			dangerouslyAllowBrowser: true,
+			fetch: obsidianFetch,
+			defaultHeaders,
+			baseURL: normalizeAnthropicBaseURL(baseURL),
+		};
+		if (isAnthropicOAuthKey(apiKey)) {
+			options.authToken = apiKey;
+			defaultHeaders["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+		} else {
+			options.apiKey = apiKey;
+		}
+		return new Anthropic(options);
+	};
+
+	// validates the effective request settings (API Key, Endpoint and Model)
+	validateSettings = (
+		apiKey: string,
+		baseURL: string,
+		model?: string | null,
+	): boolean => {
+		if (!baseURL) {
+			this.plugin.log("validateSettings", "endpoint is not set");
 			return false;
 		}
-		if (!this.plugin.settings.defaultApiKey) {
-			this.plugin.log("validateSettings", "defaultApiKey is not set");
+		if (!apiKey) {
+			this.plugin.log("validateSettings", "apiKey is not set");
 			return false;
 		}
-		if (!this.plugin.settings.defaultModel) {
-			this.plugin.log("validateSettings", "defaultModel is not set");
+		if (!model) {
+			this.plugin.log("validateSettings", "model is not set");
 			return false;
 		}
 		return true;
@@ -159,19 +208,19 @@ export default class OpenAiApi {
 			}
 			effectiveApiKey = decrypted;
 		}
-		const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
 
-		if (organization) openai.organization = organization;
+		const requestModel = model ?? this.plugin.settings.defaultModel;
+		const provider = this.resolveProvider(effectiveBaseURL);
 
-		if (!this.validateSettings()) {
+		if (
+			!this.validateSettings(effectiveApiKey, effectiveBaseURL, requestModel)
+		) {
 			new Notice(
 				"Check your setting for valid API key, model and endpoint.",
 				10000,
 			);
 			return "";
 		}
-
-		if (effectiveBaseURL !== "") openai.baseURL = effectiveBaseURL;
 
 		const messages: ChatCompletionMessageParam[] =
 			typeof promptOrMessages === "string"
@@ -215,7 +264,8 @@ export default class OpenAiApi {
 
 		// resolve the completion token limit: template argument > manual
 		// setting > maximum detected for the model > 0 (= omit the field so
-		// the provider applies its own default)
+		// the provider applies its own default; Anthropic instead falls back
+		// to DEFAULT_ANTHROPIC_MAX_TOKENS because max_tokens is required)
 		const resolvedMaxTokens = this.plugin.resolveMaxTokens(
 			maxTokens ?? null,
 			effectiveBaseURL,
@@ -223,23 +273,62 @@ export default class OpenAiApi {
 		);
 
 		try {
-			const completion = await openai.chat.completions.create({
-				messages: messages,
-				model: model ?? this.plugin.settings.defaultModel,
-				...(resolvedMaxTokens > 0
-					? { max_completion_tokens: resolvedMaxTokens }
-					: {}),
-			});
+			let completion: SimpleChatCompletion;
+			let rawResponse: unknown;
+
+			if (provider === "anthropic") {
+				const client = this.createAnthropicClient(
+					effectiveApiKey,
+					effectiveBaseURL,
+				);
+				// Anthropic keeps the system prompt out of the messages array
+				const draft = messagesToAnthropic(
+					this.plugin.settings.defaultSystemMessage,
+					messages,
+				);
+				if (draft.messages.length === 0) {
+					throw new Error(
+						"Anthropic requires at least one non-empty user or assistant message",
+					);
+				}
+				const response = await client.messages.create({
+					model: requestModel,
+					max_tokens:
+						resolvedMaxTokens > 0
+							? resolvedMaxTokens
+							: DEFAULT_ANTHROPIC_MAX_TOKENS,
+					...(draft.system ? { system: draft.system } : {}),
+					messages: draft.messages,
+				});
+				completion = anthropicToSimpleCompletion(response);
+				rawResponse = response;
+			} else {
+				const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
+				if (effectiveBaseURL !== "") openai.baseURL = effectiveBaseURL;
+
+				if (organization) openai.organization = organization;
+
+				const response = await openai.chat.completions.create({
+					messages: messages,
+					model: requestModel,
+					...(resolvedMaxTokens > 0
+						? { max_completion_tokens: resolvedMaxTokens }
+						: {}),
+				});
+				completion = openAiToSimpleCompletion(response);
+				rawResponse = response;
+			}
 
 			if (this.plugin.settings.debugToConsole) {
 				const logMessage = {
+					provider,
 					prompt: messages,
-					completion: completion,
+					completion: rawResponse,
 					// apiKey intentionally omitted so decrypted keys never
 					// reach the console
 					clientOptions: {
-						baseURL: openai.baseURL,
-						organization: openai.organization,
+						baseURL: effectiveBaseURL,
+						organization: organization ?? undefined,
 					},
 					resolvedMaxCompletionTokens:
 						resolvedMaxTokens > 0 ? resolvedMaxTokens : "omitted",
@@ -256,7 +345,7 @@ export default class OpenAiApi {
 				((Platform.isMobile && this.plugin.settings.displayTokenUsageMobile) ??
 					false)
 			) {
-				const { usage } = completion;
+				const usage = completion.usage;
 				if (usage) {
 					const displayMessage =
 						`${this.plugin.APP_ABBREVIARTION}:\n` +
@@ -266,9 +355,7 @@ export default class OpenAiApi {
 				}
 			}
 
-			return completion.choices[0].message.content
-				? completion.choices[0].message.content
-				: "";
+			return completion.content ? completion.content : "";
 		} catch (error) {
 			new Notice(
 				`${this.plugin.APP_ABBREVIARTION} Error: ${String(error)}`,
@@ -307,15 +394,63 @@ export default class OpenAiApi {
 			}
 			effectiveApiKey = decrypted;
 		}
-		const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
-		openai.baseURL = effectiveBaseURL;
 
 		if (this.plugin.settings.debugToConsole) {
 			this.plugin.log("availableModels", {
+				provider: this.resolveProvider(effectiveBaseURL),
 				endpoint: effectiveBaseURL,
 				usingApiKey: Boolean(effectiveApiKey),
 			});
 		}
+
+		// Anthropic native Models API: returns each model's max output tokens
+		// and context window, which are persisted for the max tokens cascade
+		if (this.resolveProvider(effectiveBaseURL) === "anthropic") {
+			const client = this.createAnthropicClient(
+				effectiveApiKey,
+				effectiveBaseURL,
+			);
+			try {
+				const models = await client.models.list();
+				const ids: string[] = [];
+				const limits: Record<string, ModelLimit> = {};
+				// auto-pagination: iterates every page of the list
+				for await (const model of models) {
+					ids.push(model.id);
+					const maxCompletionTokens = asPositiveNumber(model.max_tokens);
+					const contextLength = asPositiveNumber(model.max_input_tokens);
+					if (
+						maxCompletionTokens !== undefined ||
+						contextLength !== undefined
+					) {
+						limits[model.id] = {
+							maxCompletionTokens,
+							contextLength,
+							fetchedAt: Date.now(),
+						};
+					}
+				}
+				if (Object.keys(limits).length > 0) {
+					await this.plugin.saveModelLimits(effectiveBaseURL, limits);
+				}
+				if (this.plugin.settings.debugToConsole) {
+					this.plugin.log("availableModels", {
+						models: ids,
+						limitsDetected: Object.keys(limits).length,
+					});
+				}
+				return ids;
+			} catch (error) {
+				new Notice(
+					`${this.plugin.APP_ABBREVIARTION} Error fetching models: ${String(error)}`,
+					15000,
+				);
+				return [];
+			}
+		}
+
+		const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
+		openai.baseURL = effectiveBaseURL;
 
 		try {
 			const models = await openai.models.list();

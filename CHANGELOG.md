@@ -1,6 +1,7 @@
-# 1.0.31
+# Unreleased
 ### Updates
-- Added MaxTokens per model manual setting.
+- Anthropic compatibility: endpoints using the native Anthropic Messages API (Claude models) are now supported. The API type is auto-detected from the endpoint URL and can be forced per endpoint with the new "API type" selector in the endpoint editor (Auto-detect / OpenAI compatible / Anthropic). Model listing uses the native Models API and captures each model's max output tokens and context window; the max tokens cascade uses them automatically, falling back to 4096 when a model reports no limit. `max_tokens` is required by Anthropic. OAuth access tokens (`sk-ant-oat...`) are supported via the Authorization header.
+- Fixed: fetching models failed with a 401 when API keys were password-encrypted (the encrypted blob was sent as the API key instead of decrypting it first).
 
 # 1.0.30
 ### Updates

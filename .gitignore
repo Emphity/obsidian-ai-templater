@@ -16,3 +16,6 @@ data.json
 
 # other
 **/.DS_Store
+
+# opencode local
+.opencode/

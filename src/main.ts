@@ -11,6 +11,7 @@ import type {
 import {
 	DEFAULT_SETTINGS,
 	mergeModels,
+	sanitizeApiType,
 	savedModelListFor,
 } from "./settings/settings";
 import type { InternalModuleAit } from "./templater/InternalModuleAit";
@@ -127,6 +128,7 @@ export default class AitPlugin extends Plugin {
 				let value = "";
 				let alias = "";
 				let apiKey = "";
+				let apiType: unknown = "auto";
 				if (typeof raw === "string") {
 					value = raw;
 				} else if (typeof raw === "object" && raw !== null) {
@@ -134,13 +136,20 @@ export default class AitPlugin extends Plugin {
 						value?: unknown;
 						alias?: unknown;
 						apiKey?: unknown;
+						apiType?: unknown;
 					};
 					if (typeof entry.value === "string") value = entry.value;
 					if (typeof entry.alias === "string") alias = entry.alias;
 					if (typeof entry.apiKey === "string") apiKey = entry.apiKey;
+					apiType = entry.apiType;
 				}
 				if (value && !endpoints.some((item) => item.value === value)) {
-					endpoints.push({ value, alias, apiKey });
+					endpoints.push({
+						value,
+						alias,
+						apiKey,
+						apiType: sanitizeApiType(apiType),
+					});
 				}
 			}
 		}
@@ -241,6 +250,7 @@ export default class AitPlugin extends Plugin {
 				value: this.settings.defaultEndpoint,
 				alias: "",
 				apiKey: "",
+				apiType: "auto",
 			});
 		}
 		if (this.settings.defaultEndpoint) {
@@ -269,6 +279,7 @@ export default class AitPlugin extends Plugin {
 						value: OPENAI_DEFAULT_ENDPOINT,
 						alias: "OpenAI",
 						apiKey: legacyKey,
+						apiType: "auto",
 					});
 				}
 				this.settings.defaultEndpoint = OPENAI_DEFAULT_ENDPOINT;

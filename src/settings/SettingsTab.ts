@@ -1,6 +1,7 @@
 import type {
 	App,
 	ButtonComponent,
+	DropdownComponent,
 	TextComponent,
 	ToggleComponent,
 } from "obsidian";
@@ -8,13 +9,21 @@ import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type AitPlugin from "../main";
 import { decrypt, isEncrypted } from "../utils/Crypto";
 import { promotionalLinks } from "./Promotional";
-import type { SavedModelList } from "./settings";
-import { manualMaxTokensFor, mergeModels, savedModelListFor } from "./settings";
+import type { ApiTypeSetting, SavedModelList } from "./settings";
+import {
+	API_TYPE_LABELS,
+	API_TYPE_OPTIONS,
+	manualMaxTokensFor,
+	mergeModels,
+	savedModelListFor,
+} from "./settings";
 
 interface SelectableListEntry {
 	value: string;
 	alias?: string;
 	apiKey?: string;
+	// API dialect of the endpoint (endpoint list only)
+	apiType?: ApiTypeSetting;
 	// optional detail line shown below the value (e.g. detected token limit)
 	hint?: string;
 }
@@ -44,6 +53,9 @@ interface SelectableListConfig {
 		getFor: (model: string) => number | undefined;
 		setFor: (model: string, maxTokens: number | undefined) => Promise<void>;
 	};
+	// when set, the edit form includes an API type selector (endpoint list);
+	// the value is read from / written to the entry's apiType field
+	withApiType?: boolean;
 }
 
 export class OWlSettingTab extends PluginSettingTab {
@@ -71,19 +83,24 @@ export class OWlSettingTab extends PluginSettingTab {
 		this.addSelectableListSetting(containerEl, {
 			name: "Endpoint",
 			description:
-				"The endpoint for the AI service. Provide an OpenAI API compatible endpoint, for example: https://openrouter.ai/api/v1/ or https://api.openai.com/v1/",
+				"The endpoint for the AI service. OpenAI API compatible endpoints like https://openrouter.ai/api/v1/ or https://api.openai.com/v1/, or native Anthropic endpoints like https://api.anthropic.com. The API type is detected automatically and can be forced per endpoint when editing it.",
 			placeholder: "https://openrouter.ai/api/v1/",
 			aliasPlaceholder: "Alias (optional)",
 			apiKeyPlaceholder: "API key (optional)",
 			allowEmpty: true,
 			emptyOptionName: "Select an endpoint",
+			withApiType: true,
 			getValue: () => this.plugin.settings.defaultEndpoint,
 			setValue: async (value) => {
 				this.plugin.settings.defaultEndpoint = value;
 				this.plugin.settings.defaultApiKey = this.apiKeyForEndpoint(value);
 				await this.plugin.saveSettings();
 			},
-			getSavedEntries: () => this.plugin.settings.savedEndpoints,
+			getSavedEntries: () =>
+				this.plugin.settings.savedEndpoints.map((entry) => ({
+					...entry,
+					hint: API_TYPE_LABELS[entry.apiType ?? "auto"],
+				})),
 			setSavedEntries: async (entries) => {
 				// encrypt any plaintext key before persisting
 				this.plugin.settings.savedEndpoints = await Promise.all(
@@ -91,6 +108,7 @@ export class OWlSettingTab extends PluginSettingTab {
 						value: entry.value,
 						alias: entry.alias ?? "",
 						apiKey: await this.plugin.encryptKey(entry.apiKey ?? ""),
+						apiType: entry.apiType ?? "auto",
 					})),
 				);
 				if (
@@ -330,11 +348,9 @@ export class OWlSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		const apiKey = this.apiKeyForEndpoint(endpoint);
-		const fetched = await this.plugin.openAiApi.availableModels(
-			endpoint,
-			apiKey || null,
-		);
+		// the key is resolved (and decrypted) inside availableModels via
+		// decryptKeyFor; passing the stored value would send the ciphertext
+		const fetched = await this.plugin.openAiApi.availableModels(endpoint, null);
 		if (fetched.length === 0) return;
 
 		const modelLists = this.plugin.settings.savedModels ?? [];
@@ -437,6 +453,7 @@ export class OWlSettingTab extends PluginSettingTab {
 		let aliasInput: TextComponent | undefined;
 		let valueInput: TextComponent | undefined;
 		let apiKeyInput: TextComponent | undefined;
+		let apiTypeDropdown: DropdownComponent | undefined;
 		let maxTokensInput: TextComponent | undefined;
 		let saveButton: ButtonComponent | undefined;
 		let editingValue: string | undefined;
@@ -459,6 +476,7 @@ export class OWlSettingTab extends PluginSettingTab {
 				aliasInput?.setValue("");
 				valueInput?.setValue("");
 				apiKeyInput?.setValue("");
+				apiTypeDropdown?.setValue("auto");
 				maxTokensInput?.setValue("");
 			}
 			toggleButton?.setIcon(visible ? "x" : "plus");
@@ -519,12 +537,15 @@ export class OWlSettingTab extends PluginSettingTab {
 				}
 
 				const nextEntries = [...entries];
+				const apiType = (apiTypeDropdown?.getValue() ??
+					"auto") as ApiTypeSetting;
 				const existing = editingValue
 					? nextEntries.find((entry) => entry.value === editingValue)
 					: nextEntries.find((entry) => entry.value === value);
 				if (existing) {
 					existing.value = value;
 					existing.alias = alias;
+					existing.apiType = apiType;
 					existing.apiKey = apiKey
 						? await this.plugin.encryptKey(apiKey)
 						: existing.apiKey;
@@ -532,6 +553,7 @@ export class OWlSettingTab extends PluginSettingTab {
 					nextEntries.push({
 						value,
 						alias,
+						apiType,
 						apiKey: await this.plugin.encryptKey(apiKey),
 					});
 				}
@@ -539,6 +561,16 @@ export class OWlSettingTab extends PluginSettingTab {
 				await config.setSavedEntries(nextEntries);
 				if (config.getValue() === editingValue || config.getValue() === value) {
 					await config.setValue(value);
+				}
+				if (config.withApiType) {
+					inputSetting.addDropdown((dropdown) => {
+						apiTypeDropdown = dropdown;
+						for (const option of API_TYPE_OPTIONS) {
+							dropdown.addOption(option, API_TYPE_LABELS[option]);
+						}
+						dropdown.setValue("auto");
+						dropdown.selectEl.addClass("ait-input-apitype");
+					});
 				}
 				if (config.maxTokens) {
 					const parsed = Number.parseInt(
@@ -558,6 +590,7 @@ export class OWlSettingTab extends PluginSettingTab {
 			editingValue = entry.value;
 			aliasInput?.setValue(entry.alias ?? "");
 			valueInput?.setValue(entry.value);
+			apiTypeDropdown?.setValue(entry.apiType ?? "auto");
 			if (config.maxTokens) {
 				maxTokensInput?.setValue(
 					config.maxTokens.getFor(entry.value)?.toString() ?? "",

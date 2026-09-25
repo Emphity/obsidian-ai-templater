@@ -1,6 +1,6 @@
 # Intro
 
-This plugin extends Templater to interact with large language models. It is primarily designed to work with OpenAI LLMs, like the ones used by ChatGPT, but is also compatible with any LLM that supports the OpenAI API.
+This plugin extends Templater to interact with large language models. It is primarily designed to work with OpenAI LLMs, like the ones used by ChatGPT, but is also compatible with any LLM that supports the OpenAI API, as well as with Anthropic endpoints (Claude models) through the native Anthropic Messages API.
 
 For example, in Templater, you can use the following command to ask your selected provider's model a question:
 
@@ -8,7 +8,7 @@ For example, in Templater, you can use the following command to ask your selecte
 
 For detailed instructions on the use of this plugin, please see: [https://tfthacker.com/AIT]
 
-Works with OpenAI API compatible endpoints.
+Works with OpenAI API compatible endpoints and native Anthropic endpoints.
 
 # How it works?
 ## Pre-requisites
@@ -36,18 +36,19 @@ tR += '> ' + response -%>
 ## Checked compatible endpoints
 - OpenCode
 - OpenAI
+- Anthropic
 - OpenRouter
 - Ollama
 - LMStudio
 # Future implementations/fixes
 ## Planned
 - [ ] Jev compatibility
-- [ ] Anthropic compatibility
 - [ ] Tool calling
 
 ## Completed
 - [x] Manually edit MaxTokens per model
   - For those endpoints that don't "share" it.
+- [x] Anthropic compatibility
 
 # Ways to connect with the creator and more information on his work
 

@@ -3,7 +3,7 @@
 
 class ActivityIndicator {
 	private spinner: HTMLDivElement | null = null;
-	private timerId: ReturnType<typeof setTimeout> | null = null;
+	private timerId: number | null = null;
 
 	add(): void {
 		// Create the parent div

@@ -26,7 +26,7 @@ export const initializeTemplaterInternalModule = async (
 ): Promise<InternalModuleAit> => {
 	return new Promise((resolve, reject) => {
 		let retries = 30;
-		const intervalId = setInterval(() => {
+		const intervalId = activeWindow.setInterval(() => {
 			const templater = (
 				plugin.app as App & { plugins: ObsidianPlugins }
 			).plugins.getPlugin("templater-obsidian") as TemplaterPluginLike;
