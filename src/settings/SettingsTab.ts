@@ -49,6 +49,11 @@ interface SelectableListConfig {
 export class OWlSettingTab extends PluginSettingTab {
 	plugin: AitPlugin;
 
+	// lists whose editor panel should reopen after display() re-renders the
+	// tab, so Save/Remove can be used several times in a row without having
+	// to click Edit/+ again
+	private listsToReopen = new Set<string>();
+
 	constructor(app: App, plugin: AitPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
@@ -56,6 +61,11 @@ export class OWlSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const { containerEl } = this;
+		// preserve the scroll position of the settings pane across rebuilds
+		const scrollContainer = containerEl.closest(
+			".vertical-tab-content",
+		) as HTMLElement | null;
+		const scrollTop = scrollContainer?.scrollTop ?? 0;
 		containerEl.empty();
 
 		this.addSelectableListSetting(containerEl, {
@@ -277,6 +287,13 @@ export class OWlSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		// restore the scroll position after the rebuild settles
+		if (scrollContainer && scrollTop > 0) {
+			requestAnimationFrame(() => {
+				scrollContainer.scrollTop = scrollTop;
+			});
+		}
 	}
 
 	private apiKeyForEndpoint(value: string): string {
@@ -424,6 +441,13 @@ export class OWlSettingTab extends PluginSettingTab {
 		let saveButton: ButtonComponent | undefined;
 		let editingValue: string | undefined;
 		let inputsShown = false;
+		// keep the editor open after Save/Remove so several entries can be
+		// edited or removed without reopening the panel each time
+		const keepOpenAfterRender = (): void => {
+			this.listsToReopen.add(config.name);
+			setInputsVisible(false);
+			this.display();
+		};
 		const setInputsVisible = (visible: boolean): void => {
 			inputsShown = visible;
 			if (visible) {
@@ -439,6 +463,10 @@ export class OWlSettingTab extends PluginSettingTab {
 			}
 			toggleButton?.setIcon(visible ? "x" : "plus");
 		};
+		if (this.listsToReopen.has(config.name)) {
+			this.listsToReopen.delete(config.name);
+			setInputsVisible(true);
+		}
 		if (config.aliasPlaceholder) {
 			const aliasPlaceholder = config.aliasPlaceholder;
 			inputSetting.addText((text) => {
@@ -522,8 +550,7 @@ export class OWlSettingTab extends PluginSettingTab {
 				}
 				editingValue = undefined;
 				if (saveButton) saveButton.setButtonText("Save");
-				setInputsVisible(false);
-				this.display();
+				keepOpenAfterRender();
 			});
 		});
 
@@ -593,7 +620,7 @@ export class OWlSettingTab extends PluginSettingTab {
 				if (config.getValue() === entry.value) {
 					await config.setValue(nextEntries[0]?.value ?? "");
 				}
-				this.display();
+				keepOpenAfterRender();
 			});
 		}
 	}

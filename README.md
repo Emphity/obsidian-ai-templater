@@ -16,8 +16,8 @@ Works with OpenAI API compatible endpoints.
 
 ## How to use?
 1. Install and enable the plugin.
-2. Configure and select your providers' endpoints, API keys and models.
-3. Set a password.
+2. Set a password.
+3. Configure and select your providers' endpoints, API keys and models.
 4. Use await tp.ai.chat() inside a template.
 5. Trigger the template and see the results.
 
@@ -41,13 +41,13 @@ tR += '> ' + response -%>
 - LMStudio
 # Future implementations/fixes
 ## Planned
-- [ ] Manually edit MaxTokens per model
-  - For those endpoints that don't "share" it.
 - [ ] Jev compatibility
 - [ ] Anthropic compatibility
 - [ ] Tool calling
 
 ## Completed
+- [x] Manually edit MaxTokens per model
+  - For those endpoints that don't "share" it.
 
 # Ways to connect with the creator and more information on his work
 

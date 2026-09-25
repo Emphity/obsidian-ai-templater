@@ -1,3 +1,7 @@
+# 1.0.31
+### Updates
+- Added MaxTokens per model manual setting.
+
 # 1.0.30
 ### Updates
 - Endpoint and model are now selected from dropdown lists in Settings, so there is no need to type them by hand when switching setups.
