@@ -291,7 +291,13 @@ export default class OpenAiApi {
 						"Anthropic requires at least one non-empty user or assistant message",
 					);
 				}
-				const response = await client.messages.create({
+				// streaming keeps long generations alive: Anthropic rejects
+				// non-streaming requests whose max_tokens could exceed the
+				// 10 minute request limit, which happens when the detected
+				// model maximum is sent. finalMessage() resolves with the
+				// complete Message once the stream ends, so the caller sees
+				// the same shape as a non-streaming response.
+				const stream = client.messages.stream({
 					model: requestModel,
 					max_tokens:
 						resolvedMaxTokens > 0
@@ -300,6 +306,7 @@ export default class OpenAiApi {
 					...(draft.system ? { system: draft.system } : {}),
 					messages: draft.messages,
 				});
+				const response = await stream.finalMessage();
 				completion = anthropicToSimpleCompletion(response);
 				rawResponse = response;
 			} else {

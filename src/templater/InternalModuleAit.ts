@@ -81,8 +81,8 @@ export class InternalModuleAit extends InternalModule {
 			organization?: string | null,
 		) => {
 			const spinner = new ActivityIndicator();
-			spinner.add();
 			try {
+				spinner.add();
 				const result =
 					(await this.plugin?.openAiApi.chat(
 						promptOrMessages,

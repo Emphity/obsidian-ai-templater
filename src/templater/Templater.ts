@@ -35,9 +35,23 @@ export const initializeTemplaterInternalModule = async (
 				const internal_module = new InternalModuleAit(templater);
 				internal_module.setPlugin(plugin);
 
-				templater.templater.functions_generator.internal_functions.modules_array.push(
-					internal_module,
+				// hot-reload re-runs this on every plugin reload; retire any
+				// previous ai module first so Templater does not accumulate
+				// duplicates
+				const modules_array =
+					templater.templater.functions_generator.internal_functions
+						.modules_array;
+				const previousIndex = modules_array.findIndex(
+					(module) => (module as { name?: unknown })?.name === "ai",
 				);
+				if (previousIndex > -1) {
+					const previous = modules_array[previousIndex] as
+						| { teardown?: () => Promise<void> }
+						| undefined;
+					void previous?.teardown?.();
+					modules_array.splice(previousIndex, 1);
+				}
+				modules_array.push(internal_module);
 				internal_module
 					.init()
 					.then(() => {
