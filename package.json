@@ -8,7 +8,8 @@
 		"build": "node esbuild.config.mjs production",
 		"lint": "biome check ./src",
 		"version": "node version-bump.mjs",
-		"githubaction": "node version-github-action.mjs"
+		"githubaction": "node version-github-action.mjs",
+		"dev:vault": "AIT_OUT_DIR=/mnt/Cosas/Programas/obs/test/test/.obsidian/plugins/obsidian-ai-templater node esbuild.config.mjs"
 	},
 	"author": "TfT Hacker",
 	"license": "MIT",
