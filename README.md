@@ -40,6 +40,7 @@ tR += '> ' + response -%>
 - OpenRouter
 - Ollama
 - LMStudio
+- Anthropic
 # Future implementations/fixes
 ## Planned
 - [ ] Jev compatibility

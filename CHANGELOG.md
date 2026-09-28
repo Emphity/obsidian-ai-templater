@@ -1,6 +1,8 @@
-# Unreleased
-### Updates
+# 1.0.31
+### New
 - Anthropic compatibility: endpoints using the native Anthropic Messages API (Claude models) are now supported. The API type is auto-detected from the endpoint URL and can be forced per endpoint with the new "API type" selector in the endpoint editor (Auto-detect / OpenAI compatible / Anthropic). Model listing uses the native Models API and captures each model's max output tokens and context window; the max tokens cascade uses them automatically, falling back to 4096 when a model reports no limit. `max_tokens` is required by Anthropic. OAuth access tokens (`sk-ant-oat...`) are supported via the Authorization header.
+### No longer broken
+- Include main.js file.
 - Fixed: fetching models failed with a 401 when API keys were password-encrypted (the encrypted blob was sent as the API key instead of decrypting it first).
 - Fixed: template runs could abort with a DOM `appendChild` error thrown by the activity indicator; the spinner is now built with standard DOM APIs and can no longer break a chat call.
 - Fixed: Anthropic requests with the model's maximum `max_tokens` were rejected ("streaming is required for operations that may take longer than 10 minutes"); Anthropic chat now uses streaming internally and returns the complete response as before.

@@ -1,7 +1,7 @@
 {
 	"id": "ai-for-Templater",
-	"name": "AI for Templater (new)",
-	"version": "1.0.30",
+	"name": "AI for Templater",
+	"version": "1.0.31",
 	"minAppVersion": "1.9.14",
 	"description": "AI Extension for the Templater plugin.",
 	"author": "Emphity",
