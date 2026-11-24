@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "node esbuild.config.mjs production",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"lint": "biome check ./src",
 		"version": "node version-bump.mjs",
 		"githubaction": "node version-github-action.mjs",
@@ -20,12 +21,12 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.4.10",
 		"@types/node": "^25.5.0",
-		"@types/obsidian-typings": "github:Fevol/obsidian-typings",
+		"@types/obsidian-typings": "github:Fevol/obsidian-typings#f1f6a76c8d6202c234973680586b842f68d4279f",
 		"builtin-modules": "5.0.0",
 		"esbuild": "0.28.0",
 		"monkey-around": "^3.0.0",
 		"obsidian": "1.12.3",
-		"templater-obsidian": "github:SilentVoid13/Templater",
+		"templater-obsidian": "github:SilentVoid13/Templater#006dc61f64902dc9c72cad15c26b988576339719",
 		"tslib": "^2.8.1",
 		"typescript": "6.0.2"
 	},

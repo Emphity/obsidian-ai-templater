@@ -16,8 +16,19 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "21.x"
-      - name: Install and build
+          node-version: "22.x"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck and lint
         run: |
-          npm install
+          npm run typecheck
+          npm run lint
+      - name: Build
+        run: |
           npm run build
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+          # the bundle is tracked so plugins can be installed from a branch
+          git diff --exit-code -- main.js

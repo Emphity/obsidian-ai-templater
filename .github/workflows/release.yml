@@ -26,6 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.x"
+          cache: npm
 
       - name: Validate release metadata
         env:
@@ -44,7 +45,7 @@ jobs:
 
       - name: Build plugin
         run: |
-          npm install
+          npm ci
           npm run build
           test -s main.js
           test -s manifest.json
