@@ -74,6 +74,9 @@ export interface Settings {
 	displayTokenUsageDesktop?: boolean;
 	displayTokenUsageMobile?: boolean;
 	defaultSystemMessage: string;
+	// random PBKDF2 salt for the password-derived session key; it is not a
+	// secret and is generated once per vault
+	keySalt?: string;
 }
 
 export const savedModelListFor = (

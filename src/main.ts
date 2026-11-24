@@ -24,7 +24,16 @@ import {
 	initializeTemplaterInternalModule,
 	trackTemplater,
 } from "./templater/Templater";
-import { decrypt, deriveKey, encrypt, isEncrypted } from "./utils/Crypto";
+import {
+	decodeKeySalt,
+	decrypt,
+	deriveKey,
+	encrypt,
+	generateKeySalt,
+	isEncrypted,
+	isLegacyEncrypted,
+	toBase64,
+} from "./utils/Crypto";
 import { PasswordModal } from "./utils/PasswordModal";
 
 const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1/";
@@ -135,6 +144,12 @@ export default class AitPlugin extends Plugin {
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		let settingsChanged = false;
+
+		// the session key is derived with a vault-specific random salt
+		if (!decodeKeySalt(this.settings.keySalt)) {
+			this.settings.keySalt = toBase64(generateKeySalt());
+			settingsChanged = true;
+		}
 
 		// 0 = auto (model maximum / omit the field); guard against invalid data
 		if (!Number.isFinite(this.settings.defaultMaxNumTokens)) {
@@ -368,12 +383,23 @@ export default class AitPlugin extends Plugin {
 		);
 	}
 
+	// true when at least one key still uses the fixed-salt v1 format
+	hasLegacyEncryptedKeys(): boolean {
+		return (
+			isLegacyEncrypted(this.settings.defaultApiKey) ||
+			this.settings.savedEndpoints.some((entry) =>
+				isLegacyEncrypted(entry.apiKey),
+			)
+		);
+	}
+
 	// true when there is at least one plaintext (not yet encrypted) key
 	hasPlaintextKeys(): boolean {
-		const hasValue = (apiKey: string): boolean => Boolean(apiKey);
+		const hasPlaintext = (apiKey: string): boolean =>
+			Boolean(apiKey) && !isEncrypted(apiKey);
 		return (
-			hasValue(this.settings.defaultApiKey) ||
-			this.settings.savedEndpoints.some((entry) => hasValue(entry.apiKey))
+			hasPlaintext(this.settings.defaultApiKey) ||
+			this.settings.savedEndpoints.some((entry) => hasPlaintext(entry.apiKey))
 		);
 	}
 
@@ -403,16 +429,33 @@ export default class AitPlugin extends Plugin {
 				? `${this.APP_NAME}: set a password to protect your API keys`
 				: `${this.APP_NAME}: unlock API keys`,
 			async (password) => {
-				const key = await deriveKey(password, new Uint8Array(16));
+				const salt = await this.ensureKeySalt();
+				const sessionKey = await deriveKey(password, salt);
+				const legacyKey = await deriveKey(password, new Uint8Array(16));
 				const sample = this.firstEncryptedKey();
 				if (sample) {
 					try {
-						await decrypt(sample, key);
+						await decrypt(
+							sample,
+							isLegacyEncrypted(sample) ? legacyKey : sessionKey,
+						);
 					} catch {
 						return false;
 					}
+					if (this.hasLegacyEncryptedKeys()) {
+						try {
+							await this.migrateLegacyEncryptedKeys(legacyKey, sessionKey);
+						} catch (error) {
+							this.log("migrateLegacyEncryptedKeys", "failed", error);
+							new Notice(
+								`${this.APP_ABBREVIARTION}: could not migrate encrypted API keys.`,
+								10000,
+							);
+							return false;
+						}
+					}
 				}
-				this.unlockKey = key;
+				this.unlockKey = sessionKey;
 				new Notice(
 					settingPassword
 						? `${this.APP_ABBREVIARTION}: password set. API keys are now encrypted.`
@@ -436,6 +479,42 @@ export default class AitPlugin extends Plugin {
 			isEncrypted(item.apiKey),
 		);
 		return entry ? entry.apiKey : null;
+	}
+
+	// returns the persistent vault salt, creating and saving it if an older
+	// settings file predates v2 encryption
+	private async ensureKeySalt(): Promise<Uint8Array> {
+		const salt = decodeKeySalt(this.settings.keySalt);
+		if (salt) return salt;
+		const generated = generateKeySalt();
+		this.settings.keySalt = toBase64(generated);
+		await this.saveSettings();
+		return generated;
+	}
+
+	// decrypts v1 keys with the legacy fixed-salt key and stores them again as
+	// v2 blobs using the vault-specific session key. It is called before the
+	// session is marked as unlocked; on failure no key is kept in memory.
+	private async migrateLegacyEncryptedKeys(
+		legacyKey: CryptoKey,
+		sessionKey: CryptoKey,
+	): Promise<void> {
+		let changed = false;
+		const migrateIfNeeded = async (apiKey: string): Promise<string> => {
+			if (!apiKey || !isLegacyEncrypted(apiKey)) return apiKey;
+			const plaintext = await decrypt(apiKey, legacyKey);
+			changed = true;
+			return encrypt(plaintext, sessionKey);
+		};
+		for (const endpoint of this.settings.savedEndpoints) {
+			endpoint.apiKey = await migrateIfNeeded(endpoint.apiKey);
+		}
+		this.settings.defaultApiKey = await migrateIfNeeded(
+			this.settings.defaultApiKey,
+		);
+		if (changed) {
+			await this.saveSettings();
+		}
 	}
 
 	// encrypts every key still stored in plaintext (legacy migration or keys
