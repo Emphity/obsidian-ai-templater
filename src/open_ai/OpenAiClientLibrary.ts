@@ -121,7 +121,7 @@ export default class OpenAiApi {
 
 	// creates the OpenAI client with the Obsidian fetch wrapper and the
 	// client identification headers required by OpenCode Go
-	private createClient = (apiKey: string, baseURL: string): OpenAI => {
+	private createClient = (apiKey: string | null, baseURL: string): OpenAI => {
 		const defaultHeaders: Record<string, string> = {
 			"User-Agent": `${this.plugin.manifest.id}/${this.plugin.manifest.version}`,
 		};
@@ -142,23 +142,24 @@ export default class OpenAiApi {
 	// access tokens authenticate via Authorization header and require the
 	// oauth beta flag instead of x-api-key
 	private createAnthropicClient = (
-		apiKey: string,
+		apiKey: string | null,
 		baseURL: string,
 	): Anthropic => {
 		const defaultHeaders: Record<string, string> = {
 			"User-Agent": `${this.plugin.manifest.id}/${this.plugin.manifest.version}`,
 		};
+		const effectiveApiKey = apiKey || ANONYMOUS_API_KEY;
 		const options: AnthropicClientOptions = {
 			dangerouslyAllowBrowser: true,
 			fetch: obsidianFetch,
 			defaultHeaders,
 			baseURL: normalizeAnthropicBaseURL(baseURL),
 		};
-		if (isAnthropicOAuthKey(apiKey)) {
-			options.authToken = apiKey;
+		if (isAnthropicOAuthKey(effectiveApiKey)) {
+			options.authToken = effectiveApiKey;
 			defaultHeaders["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
 		} else {
-			options.apiKey = apiKey || ANONYMOUS_API_KEY;
+			options.apiKey = effectiveApiKey;
 		}
 		return new Anthropic(options);
 	};
@@ -379,6 +380,20 @@ export default class OpenAiApi {
 		baseURL?: string | null,
 		apiKey?: string | null,
 	): Promise<string[]> => {
+		const result = await this.availableModelsWithLimits(baseURL, apiKey);
+		await this.plugin.saveModelLimits(
+			baseURL || this.plugin.settings.defaultEndpoint,
+			result.limits,
+		);
+		return result.ids;
+	};
+
+	// same provider request as availableModels, but limits are returned to
+	// Settings so models and limits can be persisted in a single write
+	availableModelsWithLimits = async (
+		baseURL?: string | null,
+		apiKey?: string | null,
+	): Promise<{ ids: string[]; limits: Record<string, ModelLimit> }> => {
 		const effectiveBaseURL = baseURL || this.plugin.settings.defaultEndpoint;
 		if (!effectiveBaseURL) {
 			new Notice(
@@ -386,7 +401,7 @@ export default class OpenAiApi {
 				10000,
 			);
 			this.plugin.log("availableModels", "no endpoint to fetch models from");
-			return [];
+			return { ids: [], limits: {} };
 		}
 
 		let effectiveApiKey: string | null = null;
@@ -399,7 +414,7 @@ export default class OpenAiApi {
 					`${this.plugin.APP_ABBREVIARTION} is locked. Run "Unlock API keys" to send credentials to this endpoint.`,
 					10000,
 				);
-				return [];
+				return { ids: [], limits: {} };
 			}
 			effectiveApiKey = decrypted;
 		}
@@ -412,6 +427,13 @@ export default class OpenAiApi {
 			});
 		}
 
+		return this.fetchAvailableModels(effectiveBaseURL, effectiveApiKey);
+	};
+
+	private fetchAvailableModels = async (
+		effectiveBaseURL: string,
+		effectiveApiKey: string | null,
+	): Promise<{ ids: string[]; limits: Record<string, ModelLimit> }> => {
 		// Anthropic native Models API: returns each model's max output tokens
 		// and context window, which are persisted for the max tokens cascade
 		if (this.resolveProvider(effectiveBaseURL) === "anthropic") {
@@ -439,22 +461,19 @@ export default class OpenAiApi {
 						};
 					}
 				}
-				if (Object.keys(limits).length > 0) {
-					await this.plugin.saveModelLimits(effectiveBaseURL, limits);
-				}
 				if (this.plugin.settings.debugToConsole) {
 					this.plugin.log("availableModels", {
 						models: ids,
 						limitsDetected: Object.keys(limits).length,
 					});
 				}
-				return ids;
+				return { ids, limits };
 			} catch (error) {
 				new Notice(
 					`${this.plugin.APP_ABBREVIARTION} Error fetching models: ${String(error)}`,
 					15000,
 				);
-				return [];
+				return { ids: [], limits: {} };
 			}
 		}
 
@@ -471,10 +490,6 @@ export default class OpenAiApi {
 					limits[raw.id] = limit;
 				}
 			}
-			if (Object.keys(limits).length > 0) {
-				await this.plugin.saveModelLimits(effectiveBaseURL, limits);
-			}
-
 			if (this.plugin.settings.debugToConsole) {
 				this.plugin.log("availableModels", {
 					models: models.data,
@@ -482,13 +497,13 @@ export default class OpenAiApi {
 				});
 			}
 
-			return models.data.map((model) => model.id);
+			return { ids: models.data.map((model) => model.id), limits };
 		} catch (error) {
 			new Notice(
 				`${this.plugin.APP_ABBREVIARTION} Error fetching models: ${String(error)}`,
 				15000,
 			);
-			return [];
+			return { ids: [], limits: {} };
 		}
 	};
 }

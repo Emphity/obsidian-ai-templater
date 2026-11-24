@@ -111,7 +111,6 @@ export class OWlSettingTab extends PluginSettingTab {
 			setValue: async (value) => {
 				this.plugin.settings.defaultEndpoint = value;
 				this.plugin.settings.defaultApiKey = this.apiKeyForEndpoint(value);
-				await this.plugin.saveSettings();
 			},
 			getSavedEntries: () =>
 				this.plugin.settings.savedEndpoints.map((entry) => ({
@@ -140,7 +139,6 @@ export class OWlSettingTab extends PluginSettingTab {
 						this.plugin.settings.defaultEndpoint,
 					);
 				}
-				await this.plugin.saveSettings();
 			},
 		});
 
@@ -162,7 +160,6 @@ export class OWlSettingTab extends PluginSettingTab {
 			getValue: () => this.plugin.settings.defaultModel,
 			setValue: async (value) => {
 				this.plugin.settings.defaultModel = value;
-				await this.plugin.saveSettings();
 			},
 			maxTokens: {
 				getFor: (model) =>
@@ -172,7 +169,7 @@ export class OWlSettingTab extends PluginSettingTab {
 						model,
 					),
 				setFor: async (model, maxTokens) => {
-					await this.plugin.saveManualMaxTokens(
+					this.plugin.updateManualMaxTokens(
 						this.plugin.settings.defaultEndpoint || "",
 						model,
 						maxTokens,
@@ -184,38 +181,35 @@ export class OWlSettingTab extends PluginSettingTab {
 					this.plugin.settings.savedModels,
 					this.plugin.settings.defaultEndpoint || "",
 				);
-				return (list?.models ?? [])
-					.map((value) => {
-						const manual = manualMaxTokensFor(
-							this.plugin.settings.savedModels,
-							this.plugin.settings.defaultEndpoint || "",
-							value,
-						);
-						const detected = this.plugin.detectedMaxTokensFor(
-							this.plugin.settings.defaultEndpoint || "",
-							value,
-						);
-						return {
-							value,
-							hint: manual
-								? `${manual.toString()} tokens (manual)`
-								: detected
-									? `${detected.toString()} tokens (detected)`
-									: undefined,
-						};
-					})
-					.reduce<SelectableListEntry[]>((unique, entry) => {
-						if (!unique.some((candidate) => candidate.value === entry.value)) {
-							unique.push(entry);
-						}
-						return unique;
-					}, []);
+				const seen = new Set<string>();
+				const unique: SelectableListEntry[] = [];
+				for (const value of list?.models ?? []) {
+					if (seen.has(value)) continue;
+					seen.add(value);
+					const manual = manualMaxTokensFor(
+						this.plugin.settings.savedModels,
+						this.plugin.settings.defaultEndpoint || "",
+						value,
+					);
+					const detected = this.plugin.detectedMaxTokensFor(
+						this.plugin.settings.defaultEndpoint || "",
+						value,
+					);
+					unique.push({
+						value,
+						hint: manual
+							? `${manual.toString()} tokens (manual)`
+							: detected
+								? `${detected.toString()} tokens (detected)`
+								: undefined,
+					});
+				}
+				return unique;
 			},
 			setSavedEntries: async (entries) => {
 				await this.updateModelListForActiveEndpoint((list) => {
 					list.models = entries.map((entry) => entry.value);
 				});
-				await this.plugin.saveSettings();
 			},
 		});
 
@@ -233,13 +227,16 @@ export class OWlSettingTab extends PluginSettingTab {
 				text
 					.setPlaceholder("0 = use model max")
 					.setValue(this.plugin.settings.defaultMaxNumTokens.toString())
-					.onChange(async (value) => {
+					.onChange((value) => {
 						const parsed = Number.parseInt(value, 10);
 						this.plugin.settings.defaultMaxNumTokens = Number.isFinite(parsed)
 							? Math.max(0, parsed)
 							: 0;
-						await this.plugin.saveSettings();
+						this.plugin.markSettingsDirty();
 					});
+				text.inputEl.addEventListener("blur", () => {
+					void this.saveIfDirty();
+				});
 			});
 
 		new Setting(containerEl)
@@ -255,15 +252,26 @@ export class OWlSettingTab extends PluginSettingTab {
 					.setValue(
 						this.plugin.settings.defaultMaxOutgoingCharacters.toString(),
 					)
-					.onChange(async (value) => {
+					.onChange((value) => {
 						// empty/invalid input keeps the last valid guard active; NaN
 						// serializes as null and would disable the character check
 						const parsed = Number.parseInt(value, 10);
 						if (Number.isSafeInteger(parsed) && parsed > 0) {
 							this.plugin.settings.defaultMaxOutgoingCharacters = parsed;
-							await this.plugin.saveSettings();
+							this.plugin.markSettingsDirty();
 						}
 					});
+				text.inputEl.addEventListener("blur", () => {
+					if (
+						Number.parseInt(text.getValue(), 10) !==
+						this.plugin.settings.defaultMaxOutgoingCharacters
+					) {
+						text.setValue(
+							this.plugin.settings.defaultMaxOutgoingCharacters.toString(),
+						);
+					}
+					void this.saveIfDirty();
+				});
 			});
 
 		new Setting(containerEl)
@@ -275,10 +283,13 @@ export class OWlSettingTab extends PluginSettingTab {
 			.addTextArea((textEl) => {
 				textEl
 					.setValue(this.plugin.settings.defaultSystemMessage || "")
-					.onChange(async (value) => {
+					.onChange((value) => {
 						this.plugin.settings.defaultSystemMessage = value;
-						await this.plugin.saveData(this.plugin.settings);
+						this.plugin.markSettingsDirty();
 					});
+				textEl.inputEl.addEventListener("blur", () => {
+					void this.saveIfDirty();
+				});
 				textEl.inputEl.rows = 6;
 			});
 
@@ -351,7 +362,20 @@ export class OWlSettingTab extends PluginSettingTab {
 			lists.push(list);
 		}
 		update(list);
-		await this.plugin.saveSettings();
+	}
+
+	// text fields mutate memory while typing; blur or closing the pane persists
+	private async saveIfDirty(): Promise<void> {
+		if (this.plugin.hasUnsavedSettings()) {
+			await this.plugin.saveSettings();
+		}
+	}
+
+	hide(): void {
+		if (this.plugin.hasUnsavedSettings()) {
+			void this.plugin.saveSettings();
+		}
+		super.hide();
 	}
 
 	// fetches the models available on the current endpoint and stores them
@@ -367,16 +391,19 @@ export class OWlSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		// the key is resolved (and decrypted) inside availableModels via
-		// decryptKeyFor; passing the stored value would send the ciphertext
-		const fetched = await this.plugin.openAiApi.availableModels(endpoint, null);
-		if (fetched.length === 0) return;
+		// the key is resolved (and decrypted) inside availableModelsWithLimits
+		// via decryptKeyFor; passing the stored value would send the ciphertext
+		const fetched = await this.plugin.openAiApi.availableModelsWithLimits(
+			endpoint,
+			null,
+		);
+		if (fetched.ids.length === 0) return;
 
 		const modelLists = this.plugin.settings.savedModels ?? [];
 		const existing = savedModelListFor(modelLists, endpoint);
 		const models = existing
-			? mergeModels(existing.models, fetched)
-			: [...new Set(fetched)];
+			? mergeModels(existing.models, fetched.ids)
+			: [...new Set(fetched.ids)];
 		this.plugin.settings.savedModels = modelLists;
 		if (existing) {
 			existing.models = models;
@@ -390,17 +417,21 @@ export class OWlSettingTab extends PluginSettingTab {
 		) {
 			models.push(this.plugin.settings.defaultModel);
 		}
+
+		// models and reported limits are one user action and one settings write
+		this.plugin.updateModelLimits(endpoint, fetched.limits);
 		await this.plugin.saveSettings();
 
 		if (this.plugin.settings.debugToConsole) {
 			this.plugin.log("fetchModelsForEndpoint", {
 				endpoint,
 				total: models.length,
-				fetched: fetched.length,
+				fetched: fetched.ids.length,
+				limitsDetected: Object.keys(fetched.limits).length,
 			});
 		}
 		new Notice(
-			`${this.plugin.APP_ABBREVIARTION}: ${fetched.length.toString()} models available for this endpoint.`,
+			`${this.plugin.APP_ABBREVIARTION}: ${fetched.ids.length.toString()} models available for this endpoint.`,
 			6000,
 		);
 		this.display();
@@ -462,6 +493,7 @@ export class OWlSettingTab extends PluginSettingTab {
 			dropdown.setValue(config.getValue());
 			dropdown.onChange(async (value) => {
 				await config.setValue(value);
+				await this.plugin.saveSettings();
 				this.display();
 			});
 		});
@@ -477,6 +509,10 @@ export class OWlSettingTab extends PluginSettingTab {
 		let saveButton: ButtonComponent | undefined;
 		let editingValue: string | undefined;
 		let inputsShown = false;
+		// model lists can contain hundreds of entries: render the editable list
+		// only after the editor panel is actually opened
+		let renderEntries: (() => void) | undefined;
+		let listEl: HTMLElement | undefined;
 		// keep the editor open after Save/Remove so several entries can be
 		// edited or removed without reopening the panel each time
 		const keepOpenAfterRender = (): void => {
@@ -487,6 +523,7 @@ export class OWlSettingTab extends PluginSettingTab {
 		const setInputsVisible = (visible: boolean): void => {
 			inputsShown = visible;
 			if (visible) {
+				renderEntries?.();
 				inputWrapper.show();
 			} else {
 				inputWrapper.hide();
@@ -562,6 +599,17 @@ export class OWlSettingTab extends PluginSettingTab {
 				const nextEntries = [...entries];
 				const apiType = (apiTypeDropdown?.getValue() ??
 					"auto") as ApiTypeSetting;
+				if (
+					editingValue &&
+					editingValue !== value &&
+					nextEntries.some((candidate) => candidate.value === value)
+				) {
+					new Notice(
+						`${this.plugin.APP_ABBREVIARTION}: "${value}" already exists.`,
+						8000,
+					);
+					return;
+				}
 				const existing = editingValue
 					? nextEntries.find((entry) => entry.value === editingValue)
 					: nextEntries.find((entry) => entry.value === value);
@@ -581,6 +629,19 @@ export class OWlSettingTab extends PluginSettingTab {
 					});
 				}
 
+				// rename cached data before the list is replaced so limits and
+				// selections stay attached to the new URL/model id
+				if (config.withApiType && editingValue && editingValue !== value) {
+					this.plugin.renameEndpointData(editingValue, value);
+				}
+				if (config.maxTokens && editingValue && editingValue !== value) {
+					this.plugin.renameModelData(
+						this.plugin.settings.defaultEndpoint || "",
+						editingValue,
+						value,
+					);
+				}
+
 				await config.setSavedEntries(nextEntries);
 				if (config.getValue() === editingValue || config.getValue() === value) {
 					await config.setValue(value);
@@ -593,6 +654,9 @@ export class OWlSettingTab extends PluginSettingTab {
 					// empty/invalid clears the stored value; positive numbers persist
 					await config.maxTokens.setFor(value, parsed > 0 ? parsed : undefined);
 				}
+
+				// one user action, one settings write
+				await this.plugin.saveSettings();
 				editingValue = undefined;
 				if (saveButton) saveButton.setButtonText("Save");
 				keepOpenAfterRender();
@@ -623,47 +687,69 @@ export class OWlSettingTab extends PluginSettingTab {
 			valueInput?.inputEl.focus();
 		};
 
-		const listEl = inputWrapper.createDiv({ cls: "ait-saved-list" });
-		if (entries.length === 0) {
-			listEl.createDiv({
-				cls: "ait-saved-list-empty",
-				text: config.emptyMessage ?? "No saved values",
-			});
-			return;
-		}
+		renderEntries = (): void => {
+			listEl?.remove();
+			listEl = inputWrapper.createDiv({ cls: "ait-saved-list" });
+			if (entries.length === 0) {
+				listEl.createDiv({
+					cls: "ait-saved-list-empty",
+					text: config.emptyMessage ?? "No saved values",
+				});
+				return;
+			}
 
-		for (const entry of entries) {
-			const itemEl = listEl.createDiv({ cls: "ait-saved-list-item" });
-			const textsEl = itemEl.createDiv({ cls: "ait-saved-list-texts" });
-			textsEl.createSpan({
-				cls: "ait-saved-list-value",
-				text: labelFor(entry),
-			});
-			if (entry.alias?.trim()) {
-				textsEl.createDiv({ cls: "ait-saved-list-url", text: entry.value });
-			}
-			if (entry.hint?.trim()) {
-				textsEl.createDiv({ cls: "ait-saved-list-url", text: entry.hint });
-			}
-			const editButton = itemEl.createEl("button", { text: "Edit" });
-			editButton.addEventListener("click", () => {
-				showInputsFor(entry);
-			});
-			const removeButton = itemEl.createEl("button", {
-				cls: "mod-warning",
-				text: "Remove",
-			});
-			removeButton.addEventListener("click", async () => {
-				if (!config.allowEmpty && entries.length === 1) return;
-				const nextEntries = entries.filter(
-					(candidate) => candidate.value !== entry.value,
-				);
-				await config.setSavedEntries(nextEntries);
-				if (config.getValue() === entry.value) {
-					await config.setValue(nextEntries[0]?.value ?? "");
+			for (const entry of entries) {
+				const itemEl = listEl.createDiv({ cls: "ait-saved-list-item" });
+				const textsEl = itemEl.createDiv({ cls: "ait-saved-list-texts" });
+				textsEl.createSpan({
+					cls: "ait-saved-list-value",
+					text: labelFor(entry),
+				});
+				if (entry.alias?.trim()) {
+					textsEl.createDiv({ cls: "ait-saved-list-url", text: entry.value });
 				}
-				keepOpenAfterRender();
-			});
+				if (entry.hint?.trim()) {
+					textsEl.createDiv({ cls: "ait-saved-list-url", text: entry.hint });
+				}
+				const editButton = itemEl.createEl("button", { text: "Edit" });
+				editButton.addEventListener("click", () => {
+					showInputsFor(entry);
+				});
+				const removeButton = itemEl.createEl("button", {
+					cls: "mod-warning",
+					text: "Remove",
+				});
+				removeButton.addEventListener("click", async () => {
+					if (!config.allowEmpty && entries.length === 1) return;
+					const nextEntries = entries.filter(
+						(candidate) => candidate.value !== entry.value,
+					);
+
+					// drop cached endpoint/model data together with the entry
+					if (config.withApiType) {
+						this.plugin.removeEndpointData(
+							entry.value,
+							nextEntries[0]?.value ?? "",
+						);
+					}
+					if (config.maxTokens) {
+						this.plugin.removeModelData(
+							this.plugin.settings.defaultEndpoint || "",
+							entry.value,
+						);
+					}
+
+					await config.setSavedEntries(nextEntries);
+					if (config.getValue() === entry.value) {
+						await config.setValue(nextEntries[0]?.value ?? "");
+					}
+					await this.plugin.saveSettings();
+					keepOpenAfterRender();
+				});
+			}
+		};
+		if (inputsShown) {
+			renderEntries();
 		}
 	}
 }

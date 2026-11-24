@@ -11,6 +11,10 @@ import type {
 import {
 	DEFAULT_SETTINGS,
 	mergeModels,
+	removeModelData,
+	removeSavedModelList,
+	renameModelData,
+	renameSavedModelList,
 	sanitizeApiType,
 	savedModelListFor,
 } from "./settings/settings";
@@ -84,6 +88,9 @@ export default class AitPlugin extends Plugin {
 	internalModuleAit!: InternalModuleAit | null;
 	settings: Settings = DEFAULT_SETTINGS;
 
+	// text fields update memory on every keystroke and persist on blur/close
+	private settingsDirty = false;
+
 	// session unlock state: the AES-GCM key derived from the user password
 	// lives only in memory; it is never persisted
 	unlockKey: CryptoKey | null = null;
@@ -127,10 +134,12 @@ export default class AitPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		let settingsChanged = false;
 
 		// 0 = auto (model maximum / omit the field); guard against invalid data
 		if (!Number.isFinite(this.settings.defaultMaxNumTokens)) {
 			this.settings.defaultMaxNumTokens = 0;
+			settingsChanged = true;
 		}
 
 		// the outgoing character guard must stay usable: NaN serializes as
@@ -141,9 +150,10 @@ export default class AitPlugin extends Plugin {
 		) {
 			this.settings.defaultMaxOutgoingCharacters =
 				DEFAULT_SETTINGS.defaultMaxOutgoingCharacters;
+			settingsChanged = true;
 		}
 
-		const rawEndpoints: unknown = this.settings.savedEndpoints;
+		const rawEndpoints = this.settings.savedEndpoints;
 		const endpoints: SavedEndpoint[] = [];
 		if (Array.isArray(rawEndpoints)) {
 			for (const raw of rawEndpoints) {
@@ -175,12 +185,15 @@ export default class AitPlugin extends Plugin {
 				}
 			}
 		}
+		if (JSON.stringify(rawEndpoints ?? null) !== JSON.stringify(endpoints)) {
+			settingsChanged = true;
+		}
 		this.settings.savedEndpoints = endpoints;
 
 		// migration: savedModels used to be string[] (global list); now it is a
 		// SavedModelList[] with one list per endpoint. Legacy entries are linked
 		// to the active endpoint.
-		const rawModelLists: unknown = this.settings.savedModels;
+		const rawModelLists = this.settings.savedModels;
 		const modelLists: SavedModelList[] = [];
 		const legacyModels: string[] = [];
 		if (Array.isArray(rawModelLists)) {
@@ -262,6 +275,9 @@ export default class AitPlugin extends Plugin {
 				});
 			}
 		}
+		if (JSON.stringify(rawModelLists ?? null) !== JSON.stringify(modelLists)) {
+			settingsChanged = true;
+		}
 		this.settings.savedModels = modelLists;
 
 		if (
@@ -274,6 +290,7 @@ export default class AitPlugin extends Plugin {
 				apiKey: "",
 				apiType: "auto",
 			});
+			settingsChanged = true;
 		}
 		if (this.settings.defaultEndpoint) {
 			const activeEndpoint = endpoints.find(
@@ -281,6 +298,7 @@ export default class AitPlugin extends Plugin {
 			);
 			if (activeEndpoint && !activeEndpoint.apiKey) {
 				activeEndpoint.apiKey = this.settings.defaultApiKey;
+				settingsChanged = true;
 			}
 		} else {
 			const legacyOpenAiKey = (
@@ -306,6 +324,7 @@ export default class AitPlugin extends Plugin {
 				}
 				this.settings.defaultEndpoint = OPENAI_DEFAULT_ENDPOINT;
 				this.settings.defaultApiKey = legacyKey;
+				settingsChanged = true;
 			}
 		}
 		if (this.settings.defaultModel) {
@@ -317,14 +336,28 @@ export default class AitPlugin extends Plugin {
 				!activeList.models.includes(this.settings.defaultModel)
 			) {
 				activeList.models.push(this.settings.defaultModel);
+				settingsChanged = true;
 			}
 		}
 
-		await this.saveSettings();
+		if (settingsChanged) {
+			await this.saveSettings();
+		}
 	}
 
 	async saveSettings() {
+		this.settingsDirty = false;
 		await this.saveData(this.settings);
+	}
+
+	// marks settings changed by continuous text input; the UI persists them on
+	// blur or when the settings pane closes
+	markSettingsDirty(): void {
+		this.settingsDirty = true;
+	}
+
+	hasUnsavedSettings(): boolean {
+		return this.settingsDirty;
 	}
 
 	// true when there is at least one encrypted key stored
@@ -461,12 +494,12 @@ export default class AitPlugin extends Plugin {
 		return encrypt(apiKey, this.unlockKey);
 	}
 
-	// stores the token limits reported by an endpoint for its models; called
-	// after a models fetch. The models list itself is managed by the caller.
-	async saveModelLimits(
+	// merges the token limits reported by an endpoint without persisting; the
+	// caller decides when to save so a model refresh can be one disk write
+	updateModelLimits(
 		endpoint: string,
 		limits: Record<string, ModelLimit>,
-	): Promise<void> {
+	): void {
 		if (!endpoint || Object.keys(limits).length === 0) return;
 		let list = savedModelListFor(this.settings.savedModels, endpoint);
 		if (!list) {
@@ -474,16 +507,25 @@ export default class AitPlugin extends Plugin {
 			this.settings.savedModels.push(list);
 		}
 		list.limits = { ...(list.limits ?? {}), ...limits };
+	}
+
+	async saveModelLimits(
+		endpoint: string,
+		limits: Record<string, ModelLimit>,
+	): Promise<void> {
+		if (!endpoint || Object.keys(limits).length === 0) return;
+		this.updateModelLimits(endpoint, limits);
 		await this.saveSettings();
 	}
 
-	// stores the manually entered max token value for a model on the active
-	// endpoint (informational only). Passing undefined removes the entry.
-	async saveManualMaxTokens(
+	// updates the manually entered max token value for a model (informational
+	// only). Passing undefined removes the entry. Does not persist; the caller
+	// groups it with other model-list changes.
+	updateManualMaxTokens(
 		endpoint: string,
 		model: string,
 		maxTokens: number | undefined,
-	): Promise<void> {
+	): void {
 		if (!endpoint || !model) return;
 		const existing = savedModelListFor(this.settings.savedModels, endpoint);
 		if (!existing) {
@@ -501,7 +543,51 @@ export default class AitPlugin extends Plugin {
 				existing.manualLimits[model] = maxTokens;
 			}
 		}
+	}
+
+	async saveManualMaxTokens(
+		endpoint: string,
+		model: string,
+		maxTokens: number | undefined,
+	): Promise<void> {
+		this.updateManualMaxTokens(endpoint, model, maxTokens);
 		await this.saveSettings();
+	}
+
+	// moves cached endpoint data when the user renames an endpoint. When the
+	// active endpoint is renamed, the active selection/key move with it.
+	renameEndpointData(from: string, to: string): void {
+		if (!from || !to || from === to) return;
+		renameSavedModelList(this.settings.savedModels, from, to);
+		if (this.settings.defaultEndpoint === from) {
+			this.settings.defaultEndpoint = to;
+			this.settings.defaultApiKey =
+				this.settings.savedEndpoints.find((entry) => entry.value === from)
+					?.apiKey ?? this.settings.defaultApiKey;
+		}
+	}
+
+	// removes cached endpoint data. When the active endpoint is removed, the
+	// selection falls back to the caller-provided next endpoint.
+	removeEndpointData(endpoint: string, nextEndpoint = ""): void {
+		removeSavedModelList(this.settings.savedModels, endpoint);
+		if (this.settings.defaultEndpoint === endpoint) {
+			this.settings.defaultEndpoint = nextEndpoint;
+			this.settings.defaultApiKey =
+				this.settings.savedEndpoints.find(
+					(entry) => entry.value === nextEndpoint,
+				)?.apiKey ?? "";
+		}
+	}
+
+	// moves a model's informational/detected annotations after a rename
+	renameModelData(endpoint: string, from: string, to: string): void {
+		renameModelData(this.settings.savedModels, endpoint, from, to);
+	}
+
+	// removes a model's informational/detected annotations
+	removeModelData(endpoint: string, model: string): void {
+		removeModelData(this.settings.savedModels, endpoint, model);
 	}
 
 	// resolves the max_completion_tokens value for a request using this
