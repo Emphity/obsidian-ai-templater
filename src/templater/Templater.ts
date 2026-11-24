@@ -21,15 +21,41 @@ type TemplaterPluginLike = {
 	};
 };
 
+const getTemplater = (plugin: AitPlugin): TemplaterPluginLike | null =>
+	(plugin.app as App & { plugins: ObsidianPlugins }).plugins.getPlugin(
+		"templater-obsidian",
+	) as TemplaterPluginLike | null;
+
+// removes a module from Templater's internal list. Without a target this
+// retires every previous "ai" module after a hot reload; with a target it
+// removes exactly the instance owned by this plugin.
+const removeTemplaterModule = (
+	templater: TemplaterPluginLike,
+	target?: InternalModuleAit,
+): void => {
+	const modules_array =
+		templater.templater.functions_generator.internal_functions.modules_array;
+	for (let index = modules_array.length - 1; index >= 0; index--) {
+		const module = modules_array[index] as
+			| (InternalModuleAit & { teardown?: () => Promise<void> })
+			| undefined;
+		const matches = target
+			? module === target
+			: (module as { name?: unknown })?.name === "ai";
+		if (matches && module) {
+			modules_array.splice(index, 1);
+			void module.teardown?.();
+		}
+	}
+};
+
 export const initializeTemplaterInternalModule = async (
 	plugin: AitPlugin,
 ): Promise<InternalModuleAit> => {
 	return new Promise((resolve, reject) => {
 		let retries = 30;
 		const intervalId = activeWindow.setInterval(() => {
-			const templater = (
-				plugin.app as App & { plugins: ObsidianPlugins }
-			).plugins.getPlugin("templater-obsidian") as TemplaterPluginLike;
+			const templater = getTemplater(plugin);
 			if (templater) {
 				activeWindow.clearInterval(intervalId);
 				const internal_module = new InternalModuleAit(templater);
@@ -38,26 +64,18 @@ export const initializeTemplaterInternalModule = async (
 				// hot-reload re-runs this on every plugin reload; retire any
 				// previous ai module first so Templater does not accumulate
 				// duplicates
-				const modules_array =
-					templater.templater.functions_generator.internal_functions
-						.modules_array;
-				const previousIndex = modules_array.findIndex(
-					(module) => (module as { name?: unknown })?.name === "ai",
+				removeTemplaterModule(templater);
+				templater.templater.functions_generator.internal_functions.modules_array.push(
+					internal_module,
 				);
-				if (previousIndex > -1) {
-					const previous = modules_array[previousIndex] as
-						| { teardown?: () => Promise<void> }
-						| undefined;
-					void previous?.teardown?.();
-					modules_array.splice(previousIndex, 1);
-				}
-				modules_array.push(internal_module);
 				internal_module
 					.init()
 					.then(() => {
 						resolve(internal_module);
 					})
 					.catch((error: unknown) => {
+						// do not leave a partially initialized module registered
+						removeTemplaterModule(templater, internal_module);
 						if (error instanceof Error) {
 							console.error(
 								"Error initializing internal module:",
@@ -76,7 +94,21 @@ export const initializeTemplaterInternalModule = async (
 				retries--;
 			}
 		}, 1000);
+		// unloading the plugin cancels a still-pending lookup
+		plugin.registerInterval(intervalId);
 	});
+};
+
+// removes this plugin's module from Templater and drops the plugin reference.
+// Safe to call several times and during plugin unload/hot reload.
+export const detachTemplaterInternalModule = (plugin: AitPlugin): void => {
+	const module = plugin.internalModuleAit;
+	if (module) {
+		const templater = getTemplater(plugin);
+		if (templater) removeTemplaterModule(templater, module);
+		module.plugin = undefined;
+	}
+	plugin.internalModuleAit = null;
 };
 
 export const trackTemplater = (plugin: AitPlugin): void => {
@@ -84,20 +116,25 @@ export const trackTemplater = (plugin: AitPlugin): void => {
 		around((plugin.app as App & { plugins: ObsidianPlugins }).plugins, {
 			enablePlugin(oldMethod: (id: string) => Promise<void>) {
 				return async function (this: unknown, pluginId: string) {
+					const result = await oldMethod.call(this, pluginId);
 					if (pluginId === "templater-obsidian") {
-						activeWindow.setTimeout(async () => {
-							if (window.ait?.plugin)
-								window.ait.plugin.internalModuleAit =
-									await initializeTemplaterInternalModule(window.ait.plugin);
+						const timeoutId = activeWindow.setTimeout(async () => {
+							try {
+								plugin.internalModuleAit =
+									await initializeTemplaterInternalModule(plugin);
+							} catch (error) {
+								console.error("Error initializing internal module:", error);
+							}
 						}, 1000);
+						plugin.register(() => activeWindow.clearTimeout(timeoutId));
 					}
-					return oldMethod.call(this, pluginId);
+					return result;
 				};
 			},
 			disablePlugin(oldMethod: (id: string) => Promise<void>) {
 				return async function (this: unknown, pluginId: string) {
 					if (pluginId === "templater-obsidian") {
-						if (window.ait?.plugin) window.ait.plugin.internalModuleAit = null;
+						detachTemplaterInternalModule(plugin);
 					}
 					return oldMethod.call(this, pluginId);
 				};

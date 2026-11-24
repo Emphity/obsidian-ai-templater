@@ -915,6 +915,15 @@ var require_dist = __commonJS({
       }
     };
     exports.WebhookVerificationError = WebhookVerificationError;
+    function payloadBytes(payload) {
+      if (typeof payload === "string") {
+        return new TextEncoder().encode(payload);
+      }
+      if (ArrayBuffer.isView(payload) && payload.BYTES_PER_ELEMENT === 1) {
+        return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+      }
+      throw new Error("Expected payload to be of type string, Buffer or Uint8Array.");
+    }
     var Webhook2 = class _Webhook {
       constructor(secret, options) {
         if ((options === null || options === void 0 ? void 0 : options.format) === "raw") {
@@ -950,41 +959,47 @@ var require_dist = __commonJS({
           throw new WebhookVerificationError("Missing required headers");
         }
         const timestamp = this.verifyTimestamp(msgTimestamp);
-        const computedSignature = this.sign(msgId, timestamp, payload);
-        const expectedSignature = computedSignature.split(",")[1];
-        const passedSignatures = msgSignature.split(" ");
+        const bytes = payloadBytes(payload);
         const encoder = new globalThis.TextEncoder();
-        for (const versionedSignature of passedSignatures) {
-          const [version, signature] = versionedSignature.split(",");
-          if (version !== "v1") {
-            continue;
-          }
-          if ((0, timing_safe_equal_1.timingSafeEqual)(encoder.encode(signature), encoder.encode(expectedSignature))) {
-            const payloadString = payload.toString();
-            if (payloadString === "") {
-              return void 0;
-            }
-            if (jsonParse) {
-              return JSON.parse(payloadString);
-            } else {
-              return void 0;
-            }
-          }
+        const expectedSignature = encoder.encode(this.sign(msgId, timestamp, bytes));
+        const passedSignatures = msgSignature.split(" ");
+        if (!passedSignatures.some((versionedSignature) => (0, timing_safe_equal_1.timingSafeEqual)(encoder.encode(versionedSignature), expectedSignature))) {
+          throw new WebhookVerificationError("No matching signature found");
         }
-        throw new WebhookVerificationError("No matching signature found");
+        if (bytes.length === 0) {
+          return void 0;
+        }
+        if (jsonParse) {
+          return JSON.parse(typeof payload === "string" ? payload : new TextDecoder().decode(bytes));
+        } else {
+          return void 0;
+        }
       }
       sign(msgId, timestamp, payload) {
-        if (typeof payload === "string") {
-        } else if (payload.constructor.name === "Buffer") {
-          payload = payload.toString();
-        } else {
-          throw new Error("Expected payload to be of type string or Buffer.");
-        }
-        const encoder = new TextEncoder();
+        const bytes = payloadBytes(payload);
         const timestampNumber = Math.floor(timestamp.getTime() / 1e3);
-        const toSign = encoder.encode(`${msgId}.${timestampNumber}.${payload}`);
+        const prefix = new TextEncoder().encode(`${msgId}.${timestampNumber}.`);
+        const toSign = new Uint8Array(prefix.length + bytes.length);
+        toSign.set(prefix);
+        toSign.set(bytes, prefix.length);
         const expectedSignature = base64.encode(sha256.hmac(this.key, toSign));
         return `v1,${expectedSignature}`;
+      }
+      endpointVerificationResponse(challenge) {
+        const encoder = new TextEncoder();
+        const verificationKey = sha256.hmac(this.key, encoder.encode("wev-v1"));
+        const signature = base64.encode(sha256.hmac(verificationKey, encoder.encode(challenge)));
+        return `v1,${signature}`;
+      }
+      verifyEndpointVerificationResponse(challenge, header) {
+        if (!header) {
+          throw new WebhookVerificationError("Missing challenge response");
+        }
+        const encoder = new globalThis.TextEncoder();
+        const expectedSignature = encoder.encode(this.endpointVerificationResponse(challenge));
+        if (!(0, timing_safe_equal_1.timingSafeEqual)(encoder.encode(header), expectedSignature)) {
+          throw new WebhookVerificationError("No matching signature found");
+        }
       }
       verifyTimestamp(timestampHeader) {
         const now = Math.floor(Date.now() / 1e3);
@@ -25311,7 +25326,7 @@ var messagesToAnthropic = (defaultSystemMessage, messages) => {
   let hasSystem = false;
   const converted = [];
   for (const message of messages) {
-    if (message.role === "system") {
+    if (message.role === "system" || message.role === "developer") {
       const text2 = textFromContent(message.content).trim();
       if (text2) {
         systemParts.push(text2);
@@ -25359,31 +25374,6 @@ var anthropicToSimpleCompletion = (response) => {
 
 // src/api/obsidianFetch.ts
 var import_obsidian = require("obsidian");
-var obsidianFetch = async (input, init) => {
-  var _a4;
-  const body = init == null ? void 0 : init.body;
-  if (body !== void 0 && typeof body !== "string") {
-    return globalThis.fetch(input, init);
-  }
-  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const headers = {};
-  if (init == null ? void 0 : init.headers) {
-    for (const [key, value] of new Headers(init.headers).entries()) {
-      headers[key] = value;
-    }
-  }
-  const response = await (0, import_obsidian.requestUrl)({
-    url,
-    method: (_a4 = init == null ? void 0 : init.method) != null ? _a4 : "GET",
-    headers,
-    body,
-    throw: false
-  });
-  return new Response(response.text, {
-    status: response.status,
-    headers: response.headers
-  });
-};
 
 // src/api/provider.ts
 var ANTHROPIC_HOSTNAMES = /* @__PURE__ */ new Set(["api.anthropic.com"]);
@@ -25397,6 +25387,7 @@ var providerForEndpoint = (endpoint, apiType) => {
   }
 };
 var DEFAULT_ANTHROPIC_MAX_TOKENS = 4096;
+var ANONYMOUS_API_KEY = "ait-anonymous";
 var isAnthropicOAuthKey = (apiKey) => apiKey.startsWith("sk-ant-oat");
 var ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
 var normalizeAnthropicBaseURL = (baseURL) => {
@@ -25406,6 +25397,40 @@ var normalizeAnthropicBaseURL = (baseURL) => {
     normalized = normalized.slice(0, -3);
   }
   return normalized || void 0;
+};
+
+// src/api/obsidianFetch.ts
+var isAnonymousAuthorization = (value) => value === ANONYMOUS_API_KEY || value === `Bearer ${ANONYMOUS_API_KEY}`;
+var obsidianFetch = async (input, init) => {
+  var _a4;
+  const body = init == null ? void 0 : init.body;
+  if (body !== void 0 && typeof body !== "string") {
+    return globalThis.fetch(input, init);
+  }
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const headers = {};
+  if (init == null ? void 0 : init.headers) {
+    for (const [key, value] of new Headers(init.headers).entries()) {
+      headers[key] = value;
+    }
+  }
+  if (isAnonymousAuthorization(headers.authorization)) {
+    delete headers.authorization;
+  }
+  if (headers["x-api-key"] === ANONYMOUS_API_KEY) {
+    delete headers["x-api-key"];
+  }
+  const response = await (0, import_obsidian.requestUrl)({
+    url,
+    method: (_a4 = init == null ? void 0 : init.method) != null ? _a4 : "GET",
+    headers,
+    body,
+    throw: false
+  });
+  return new Response(response.text, {
+    status: response.status,
+    headers: response.headers
+  });
 };
 
 // src/settings/settings.ts
@@ -25503,7 +25528,9 @@ var OpenAiApi = class {
         defaultHeaders["x-opencode-session"] = sessionGuid;
       }
       return new OpenAI({
-        apiKey,
+        // the SDK rejects an empty key; the sentinel is removed later by
+        // obsidianFetch for unauthenticated endpoints
+        apiKey: apiKey || ANONYMOUS_API_KEY,
         dangerouslyAllowBrowser: true,
         fetch: obsidianFetch,
         defaultHeaders
@@ -25526,18 +25553,15 @@ var OpenAiApi = class {
         options.authToken = apiKey;
         defaultHeaders["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
       } else {
-        options.apiKey = apiKey;
+        options.apiKey = apiKey || ANONYMOUS_API_KEY;
       }
       return new Anthropic(options);
     };
-    // validates the effective request settings (API Key, Endpoint and Model)
-    this.validateSettings = (apiKey, baseURL, model) => {
+    // validates the effective request settings. The API key is optional:
+    // unauthenticated endpoints (Ollama, LM Studio, ...) send no credentials.
+    this.validateSettings = (baseURL, model) => {
       if (!baseURL) {
         this.plugin.log("validateSettings", "endpoint is not set");
-        return false;
-      }
-      if (!apiKey) {
-        this.plugin.log("validateSettings", "apiKey is not set");
         return false;
       }
       if (!model) {
@@ -25550,8 +25574,10 @@ var OpenAiApi = class {
     this.chat = async (promptOrMessages, model, systemMessage, maxTokens, maxOutgoingCharacters, baseURL, apiKey, organization) => {
       var _a4, _b;
       const effectiveBaseURL = baseURL || this.plugin.settings.defaultEndpoint;
-      let effectiveApiKey = apiKey != null ? apiKey : null;
-      if (!effectiveApiKey) {
+      let effectiveApiKey = null;
+      if (apiKey !== void 0 && apiKey !== null) {
+        effectiveApiKey = apiKey;
+      } else {
         const decrypted = await this.plugin.decryptKeyFor(effectiveBaseURL);
         if (decrypted === null) {
           new import_obsidian2.Notice(
@@ -25564,14 +25590,11 @@ var OpenAiApi = class {
       }
       const requestModel = model != null ? model : this.plugin.settings.defaultModel;
       const provider = this.resolveProvider(effectiveBaseURL);
-      if (!this.validateSettings(effectiveApiKey, effectiveBaseURL, requestModel)) {
-        new import_obsidian2.Notice(
-          "Check your setting for valid API key, model and endpoint.",
-          1e4
-        );
+      if (!this.validateSettings(effectiveBaseURL, requestModel)) {
+        new import_obsidian2.Notice("Check your settings for a valid endpoint and model.", 1e4);
         return "";
       }
-      const messages = typeof promptOrMessages === "string" ? [{ role: "user", content: promptOrMessages }] : promptOrMessages;
+      const messages = typeof promptOrMessages === "string" ? [{ role: "user", content: promptOrMessages }] : [...promptOrMessages];
       if (!messages.find((message) => message.role === "system")) {
         messages.unshift({
           role: "system",
@@ -25588,14 +25611,14 @@ var OpenAiApi = class {
       }
       const jsonString = JSON.stringify(messages);
       const characterCount = jsonString.length;
-      const maxCharacters = maxOutgoingCharacters ? maxOutgoingCharacters : this.plugin.settings.defaultMaxOutgoingCharacters;
+      const maxCharacters = typeof maxOutgoingCharacters === "number" && Number.isSafeInteger(maxOutgoingCharacters) && maxOutgoingCharacters > 0 ? maxOutgoingCharacters : this.plugin.settings.defaultMaxOutgoingCharacters;
       if (characterCount > maxCharacters) {
         new import_obsidian2.Notice(
           `${this.plugin.APP_ABBREVIARTION}: Character count exceeds the limit of ${maxCharacters.toString()} for outgoing AI requests and the current character count is ${characterCount.toString()}. This setting can be changed in Settings or as part of the command.`,
           15e3
         );
         this.plugin.log(
-          `chat', 'Character count exceeds limt. Defined limit is ${maxCharacters.toString()} and the current character count is ${characterCount.toString()}.`
+          `chat: character count exceeds limit. Defined limit is ${maxCharacters.toString()} and the current character count is ${characterCount.toString()}.`
         );
         return "";
       }
@@ -25690,8 +25713,10 @@ Character count: ${characterCount.toString()}`;
         this.plugin.log("availableModels", "no endpoint to fetch models from");
         return [];
       }
-      let effectiveApiKey = apiKey != null ? apiKey : null;
-      if (!effectiveApiKey) {
+      let effectiveApiKey = null;
+      if (apiKey !== void 0 && apiKey !== null) {
+        effectiveApiKey = apiKey;
+      } else {
         const decrypted = await this.plugin.decryptKeyFor(effectiveBaseURL);
         if (decrypted === null) {
           new import_obsidian2.Notice(
@@ -25710,11 +25735,11 @@ Character count: ${characterCount.toString()}`;
         });
       }
       if (this.resolveProvider(effectiveBaseURL) === "anthropic") {
-        const client = this.createAnthropicClient(
-          effectiveApiKey,
-          effectiveBaseURL
-        );
         try {
+          const client = this.createAnthropicClient(
+            effectiveApiKey,
+            effectiveBaseURL
+          );
           const models = await client.models.list();
           const ids = [];
           const limits = {};
@@ -25748,9 +25773,9 @@ Character count: ${characterCount.toString()}`;
           return [];
         }
       }
-      const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
-      openai.baseURL = effectiveBaseURL;
       try {
+        const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
+        openai.baseURL = effectiveBaseURL;
         const models = await openai.models.list();
         const limits = {};
         for (const raw of models.data) {
@@ -25886,6 +25911,15 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
     );
     const scrollTop = (_a4 = scrollContainer == null ? void 0 : scrollContainer.scrollTop) != null ? _a4 : 0;
     containerEl.empty();
+    new import_obsidian3.Setting(containerEl).setName("API key password").setDesc(
+      "Protects the API keys stored by this plugin. Set or unlock the password before saving an API key."
+    ).addButton((button) => {
+      button.setButtonText(
+        this.plugin.isUnlocked() ? "Unlocked" : "Set/unlock password"
+      ).setCta().setDisabled(this.plugin.isUnlocked()).onClick(() => {
+        this.plugin.promptUnlock();
+      });
+    });
     this.addSelectableListSetting(containerEl, {
       name: "Endpoint",
       description: "The endpoint for the AI service. OpenAI API compatible endpoints like https://openrouter.ai/api/v1/ or https://api.openai.com/v1/, or native Anthropic endpoints like https://api.anthropic.com. The API type is detected automatically and can be forced per endpoint when editing it.",
@@ -26020,11 +26054,11 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
       text.setValue(
         this.plugin.settings.defaultMaxOutgoingCharacters.toString()
       ).onChange(async (value) => {
-        this.plugin.settings.defaultMaxOutgoingCharacters = Number.parseInt(
-          value,
-          10
-        );
-        await this.plugin.saveSettings();
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isSafeInteger(parsed) && parsed > 0) {
+          this.plugin.settings.defaultMaxOutgoingCharacters = parsed;
+          await this.plugin.saveSettings();
+        }
       });
     });
     new import_obsidian3.Setting(containerEl).setName("System message").setDesc(
@@ -26200,6 +26234,7 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
       this.display();
     };
     const setInputsVisible = (visible) => {
+      var _a5;
       inputsShown = visible;
       if (visible) {
         inputWrapper.show();
@@ -26210,6 +26245,7 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
         aliasInput == null ? void 0 : aliasInput.setValue("");
         valueInput == null ? void 0 : valueInput.setValue("");
         apiKeyInput == null ? void 0 : apiKeyInput.setValue("");
+        apiKeyInput == null ? void 0 : apiKeyInput.setPlaceholder((_a5 = config.apiKeyPlaceholder) != null ? _a5 : "");
         apiTypeDropdown == null ? void 0 : apiTypeDropdown.setValue("auto");
         maxTokensInput == null ? void 0 : maxTokensInput.setValue("");
       }
@@ -26235,18 +26271,10 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
     if (config.apiKeyPlaceholder) {
       const apiKeyPlaceholder = config.apiKeyPlaceholder;
       inputSetting.addText((text) => {
-        var _a5;
         apiKeyInput = text;
         setPasswordOnBlur(text.inputEl);
         text.setPlaceholder(apiKeyPlaceholder);
         text.inputEl.addClass("ait-input-apikey");
-        if (!this.plugin.isUnlocked()) {
-          const stored = config.getSavedEntries().find((entry) => entry.apiKey);
-          if (stored && isEncrypted((_a5 = stored.apiKey) != null ? _a5 : "")) {
-            text.setDisabled(true);
-            text.setPlaceholder("Locked \u2014 unlock to edit API keys");
-          }
-        }
       });
     }
     if (config.maxTokens) {
@@ -26254,6 +26282,16 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
         maxTokensInput = text;
         text.setPlaceholder("Max tokens (optional)");
         text.inputEl.addClass("ait-input-maxtokens");
+      });
+    }
+    if (config.withApiType) {
+      inputSetting.addDropdown((dropdown) => {
+        apiTypeDropdown = dropdown;
+        for (const option of API_TYPE_OPTIONS) {
+          dropdown.addOption(option, API_TYPE_LABELS[option]);
+        }
+        dropdown.setValue("auto");
+        dropdown.selectEl.addClass("ait-input-apitype");
       });
     }
     inputSetting.addButton((button) => {
@@ -26266,7 +26304,7 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
         const apiKey = (_c2 = apiKeyInput == null ? void 0 : apiKeyInput.getValue().trim()) != null ? _c2 : "";
         if (apiKey && !this.plugin.isUnlocked()) {
           new import_obsidian3.Notice(
-            `${this.plugin.APP_ABBREVIARTION} is locked. Unlock to save API keys.`,
+            `${this.plugin.APP_ABBREVIARTION} is locked. Use "Set/unlock password" to save API keys.`,
             8e3
           );
           return;
@@ -26290,16 +26328,6 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
         await config.setSavedEntries(nextEntries);
         if (config.getValue() === editingValue || config.getValue() === value) {
           await config.setValue(value);
-        }
-        if (config.withApiType) {
-          inputSetting.addDropdown((dropdown) => {
-            apiTypeDropdown = dropdown;
-            for (const option of API_TYPE_OPTIONS) {
-              dropdown.addOption(option, API_TYPE_LABELS[option]);
-            }
-            dropdown.setValue("auto");
-            dropdown.selectEl.addClass("ait-input-apitype");
-          });
         }
         if (config.maxTokens) {
           const parsed = Number.parseInt(
@@ -26325,15 +26353,8 @@ var OWlSettingTab = class extends import_obsidian3.PluginSettingTab {
         );
       }
       if (entry.apiKey && isEncrypted(entry.apiKey)) {
-        if (this.plugin.isUnlocked()) {
-          void decrypt(entry.apiKey, this.plugin.unlockKey).then(
-            (plaintext) => {
-              apiKeyInput == null ? void 0 : apiKeyInput.setValue(plaintext);
-            }
-          );
-        } else {
-          apiKeyInput == null ? void 0 : apiKeyInput.setValue("");
-        }
+        apiKeyInput == null ? void 0 : apiKeyInput.setValue("");
+        apiKeyInput == null ? void 0 : apiKeyInput.setPlaceholder("Leave blank to keep the current key");
       } else {
         apiKeyInput == null ? void 0 : apiKeyInput.setValue((_e = entry.apiKey) != null ? _e : "");
       }
@@ -26536,29 +26557,38 @@ var InternalModuleAit = class extends InternalModule {
 };
 
 // src/templater/Templater.ts
+var getTemplater = (plugin) => plugin.app.plugins.getPlugin(
+  "templater-obsidian"
+);
+var removeTemplaterModule = (templater, target) => {
+  var _a4;
+  const modules_array = templater.templater.functions_generator.internal_functions.modules_array;
+  for (let index = modules_array.length - 1; index >= 0; index--) {
+    const module2 = modules_array[index];
+    const matches = target ? module2 === target : (module2 == null ? void 0 : module2.name) === "ai";
+    if (matches && module2) {
+      modules_array.splice(index, 1);
+      void ((_a4 = module2.teardown) == null ? void 0 : _a4.call(module2));
+    }
+  }
+};
 var initializeTemplaterInternalModule = async (plugin) => {
   return new Promise((resolve, reject) => {
     let retries = 30;
     const intervalId = activeWindow.setInterval(() => {
-      var _a4;
-      const templater = plugin.app.plugins.getPlugin("templater-obsidian");
+      const templater = getTemplater(plugin);
       if (templater) {
         activeWindow.clearInterval(intervalId);
         const internal_module = new InternalModuleAit(templater);
         internal_module.setPlugin(plugin);
-        const modules_array = templater.templater.functions_generator.internal_functions.modules_array;
-        const previousIndex = modules_array.findIndex(
-          (module2) => (module2 == null ? void 0 : module2.name) === "ai"
+        removeTemplaterModule(templater);
+        templater.templater.functions_generator.internal_functions.modules_array.push(
+          internal_module
         );
-        if (previousIndex > -1) {
-          const previous = modules_array[previousIndex];
-          void ((_a4 = previous == null ? void 0 : previous.teardown) == null ? void 0 : _a4.call(previous));
-          modules_array.splice(previousIndex, 1);
-        }
-        modules_array.push(internal_module);
         internal_module.init().then(() => {
           resolve(internal_module);
         }).catch((error) => {
+          removeTemplaterModule(templater, internal_module);
           if (error instanceof Error) {
             console.error(
               "Error initializing internal module:",
@@ -26577,28 +26607,41 @@ var initializeTemplaterInternalModule = async (plugin) => {
         retries--;
       }
     }, 1e3);
+    plugin.registerInterval(intervalId);
   });
+};
+var detachTemplaterInternalModule = (plugin) => {
+  const module2 = plugin.internalModuleAit;
+  if (module2) {
+    const templater = getTemplater(plugin);
+    if (templater) removeTemplaterModule(templater, module2);
+    module2.plugin = void 0;
+  }
+  plugin.internalModuleAit = null;
 };
 var trackTemplater = (plugin) => {
   plugin.register(
     around(plugin.app.plugins, {
       enablePlugin(oldMethod) {
         return async function(pluginId) {
+          const result = await oldMethod.call(this, pluginId);
           if (pluginId === "templater-obsidian") {
-            activeWindow.setTimeout(async () => {
-              var _a4;
-              if ((_a4 = window.ait) == null ? void 0 : _a4.plugin)
-                window.ait.plugin.internalModuleAit = await initializeTemplaterInternalModule(window.ait.plugin);
+            const timeoutId = activeWindow.setTimeout(async () => {
+              try {
+                plugin.internalModuleAit = await initializeTemplaterInternalModule(plugin);
+              } catch (error) {
+                console.error("Error initializing internal module:", error);
+              }
             }, 1e3);
+            plugin.register(() => activeWindow.clearTimeout(timeoutId));
           }
-          return oldMethod.call(this, pluginId);
+          return result;
         };
       },
       disablePlugin(oldMethod) {
         return async function(pluginId) {
-          var _a4;
           if (pluginId === "templater-obsidian") {
-            if ((_a4 = window.ait) == null ? void 0 : _a4.plugin) window.ait.plugin.internalModuleAit = null;
+            detachTemplaterInternalModule(plugin);
           }
           return oldMethod.call(this, pluginId);
         };
@@ -26692,7 +26735,7 @@ var sanitizeLimits = (raw) => {
   const positive = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : void 0;
   if (typeof raw === "object" && raw !== null) {
     for (const [key, value] of Object.entries(raw)) {
-      if (typeof key === "string" && key && typeof value === "object") {
+      if (typeof key === "string" && key && typeof value === "object" && value !== null) {
         const limit3 = value;
         result[key] = {
           contextLength: positive(limit3.contextLength),
@@ -26753,13 +26796,21 @@ var AitPlugin = class extends import_obsidian6.Plugin {
     });
   }
   onunload() {
-    new import_obsidian6.Notice(`unloading ${this.APP_NAME}`);
+    var _a4;
+    this.unlockKey = null;
+    detachTemplaterInternalModule(this);
+    if (((_a4 = window.ait) == null ? void 0 : _a4.plugin) === this) {
+      delete window.ait;
+    }
   }
   async loadSettings() {
     var _a4, _b;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     if (!Number.isFinite(this.settings.defaultMaxNumTokens)) {
       this.settings.defaultMaxNumTokens = 0;
+    }
+    if (!Number.isSafeInteger(this.settings.defaultMaxOutgoingCharacters) || this.settings.defaultMaxOutgoingCharacters <= 0) {
+      this.settings.defaultMaxOutgoingCharacters = DEFAULT_SETTINGS.defaultMaxOutgoingCharacters;
     }
     const rawEndpoints = this.settings.savedEndpoints;
     const endpoints = [];
@@ -26978,13 +27029,22 @@ var AitPlugin = class extends import_obsidian6.Plugin {
     }
   }
   // returns the decrypted key for the given endpoint, or null when the
-  // session is locked or the value cannot be decrypted
+  // session is locked or the value cannot be decrypted. Credentials are
+  // bound to their endpoint: an unknown URL never receives the key of the
+  // active endpoint. The legacy defaultApiKey is only consulted for the
+  // endpoint that is actually active.
   async decryptKeyFor(endpoint) {
-    var _a4;
     const entry = this.settings.savedEndpoints.find(
       (item) => item.value === endpoint
     );
-    const apiKey = (_a4 = entry == null ? void 0 : entry.apiKey) != null ? _a4 : this.settings.defaultApiKey;
+    let apiKey;
+    if (entry) {
+      apiKey = entry.apiKey;
+    } else if (endpoint && endpoint === this.settings.defaultEndpoint) {
+      apiKey = this.settings.defaultApiKey;
+    } else {
+      return "";
+    }
     if (!apiKey) return "";
     if (!isEncrypted(apiKey)) return apiKey;
     if (!this.unlockKey) return null;
@@ -27039,7 +27099,9 @@ var AitPlugin = class extends import_obsidian6.Plugin {
   }
   // resolves the max_completion_tokens value for a request using this
   // cascade: explicit argument (template call) > manual setting (>0) >
-  // maximum detected for the model > 0 (= omit the field, provider default)
+  // output maximum detected for the model > 0 (= omit the field, provider
+  // default). contextLength is the whole context window, not an output
+  // limit, so it is deliberately not used as max_completion_tokens.
   resolveMaxTokens(explicit, baseURL, model) {
     var _a4, _b;
     if (explicit !== void 0 && explicit !== null && explicit > 0) {
@@ -27050,8 +27112,7 @@ var AitPlugin = class extends import_obsidian6.Plugin {
     const endpoint = baseURL || this.settings.defaultEndpoint;
     const modelName = model != null ? model : this.settings.defaultModel;
     const list = savedModelListFor(this.settings.savedModels, endpoint);
-    const limit3 = (_a4 = list == null ? void 0 : list.limits) == null ? void 0 : _a4[modelName];
-    const detected = (_b = limit3 == null ? void 0 : limit3.maxCompletionTokens) != null ? _b : limit3 == null ? void 0 : limit3.contextLength;
+    const detected = (_b = (_a4 = list == null ? void 0 : list.limits) == null ? void 0 : _a4[modelName]) == null ? void 0 : _b.maxCompletionTokens;
     return detected !== void 0 && detected > 0 ? detected : 0;
   }
   // maximum detected for a model on the active endpoint, for display in the

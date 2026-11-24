@@ -7,7 +7,7 @@ import type {
 } from "obsidian";
 import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type AitPlugin from "../main";
-import { decrypt, isEncrypted } from "../utils/Crypto";
+import { isEncrypted } from "../utils/Crypto";
 import { promotionalLinks } from "./Promotional";
 import type { ApiTypeSetting, SavedModelList } from "./settings";
 import {
@@ -79,6 +79,23 @@ export class OWlSettingTab extends PluginSettingTab {
 		) as HTMLElement | null;
 		const scrollTop = scrollContainer?.scrollTop ?? 0;
 		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("API key password")
+			.setDesc(
+				"Protects the API keys stored by this plugin. Set or unlock the password before saving an API key.",
+			)
+			.addButton((button) => {
+				button
+					.setButtonText(
+						this.plugin.isUnlocked() ? "Unlocked" : "Set/unlock password",
+					)
+					.setCta()
+					.setDisabled(this.plugin.isUnlocked())
+					.onClick(() => {
+						this.plugin.promptUnlock();
+					});
+			});
 
 		this.addSelectableListSetting(containerEl, {
 			name: "Endpoint",
@@ -239,11 +256,13 @@ export class OWlSettingTab extends PluginSettingTab {
 						this.plugin.settings.defaultMaxOutgoingCharacters.toString(),
 					)
 					.onChange(async (value) => {
-						this.plugin.settings.defaultMaxOutgoingCharacters = Number.parseInt(
-							value,
-							10,
-						);
-						await this.plugin.saveSettings();
+						// empty/invalid input keeps the last valid guard active; NaN
+						// serializes as null and would disable the character check
+						const parsed = Number.parseInt(value, 10);
+						if (Number.isSafeInteger(parsed) && parsed > 0) {
+							this.plugin.settings.defaultMaxOutgoingCharacters = parsed;
+							await this.plugin.saveSettings();
+						}
 					});
 			});
 
@@ -476,6 +495,7 @@ export class OWlSettingTab extends PluginSettingTab {
 				aliasInput?.setValue("");
 				valueInput?.setValue("");
 				apiKeyInput?.setValue("");
+				apiKeyInput?.setPlaceholder(config.apiKeyPlaceholder ?? "");
 				apiTypeDropdown?.setValue("auto");
 				maxTokensInput?.setValue("");
 			}
@@ -505,13 +525,6 @@ export class OWlSettingTab extends PluginSettingTab {
 				setPasswordOnBlur(text.inputEl);
 				text.setPlaceholder(apiKeyPlaceholder);
 				text.inputEl.addClass("ait-input-apikey");
-				if (!this.plugin.isUnlocked()) {
-					const stored = config.getSavedEntries().find((entry) => entry.apiKey);
-					if (stored && isEncrypted(stored.apiKey ?? "")) {
-						text.setDisabled(true);
-						text.setPlaceholder("Locked — unlock to edit API keys");
-					}
-				}
 			});
 		}
 		if (config.maxTokens) {
@@ -519,6 +532,16 @@ export class OWlSettingTab extends PluginSettingTab {
 				maxTokensInput = text;
 				text.setPlaceholder("Max tokens (optional)");
 				text.inputEl.addClass("ait-input-maxtokens");
+			});
+		}
+		if (config.withApiType) {
+			inputSetting.addDropdown((dropdown) => {
+				apiTypeDropdown = dropdown;
+				for (const option of API_TYPE_OPTIONS) {
+					dropdown.addOption(option, API_TYPE_LABELS[option]);
+				}
+				dropdown.setValue("auto");
+				dropdown.selectEl.addClass("ait-input-apitype");
 			});
 		}
 		inputSetting.addButton((button) => {
@@ -530,7 +553,7 @@ export class OWlSettingTab extends PluginSettingTab {
 				const apiKey = apiKeyInput?.getValue().trim() ?? "";
 				if (apiKey && !this.plugin.isUnlocked()) {
 					new Notice(
-						`${this.plugin.APP_ABBREVIARTION} is locked. Unlock to save API keys.`,
+						`${this.plugin.APP_ABBREVIARTION} is locked. Use "Set/unlock password" to save API keys.`,
 						8000,
 					);
 					return;
@@ -562,16 +585,6 @@ export class OWlSettingTab extends PluginSettingTab {
 				if (config.getValue() === editingValue || config.getValue() === value) {
 					await config.setValue(value);
 				}
-				if (config.withApiType) {
-					inputSetting.addDropdown((dropdown) => {
-						apiTypeDropdown = dropdown;
-						for (const option of API_TYPE_OPTIONS) {
-							dropdown.addOption(option, API_TYPE_LABELS[option]);
-						}
-						dropdown.setValue("auto");
-						dropdown.selectEl.addClass("ait-input-apitype");
-					});
-				}
 				if (config.maxTokens) {
 					const parsed = Number.parseInt(
 						maxTokensInput?.getValue().trim() ?? "",
@@ -597,15 +610,11 @@ export class OWlSettingTab extends PluginSettingTab {
 				);
 			}
 			if (entry.apiKey && isEncrypted(entry.apiKey)) {
-				if (this.plugin.isUnlocked()) {
-					void decrypt(entry.apiKey, this.plugin.unlockKey as CryptoKey).then(
-						(plaintext) => {
-							apiKeyInput?.setValue(plaintext);
-						},
-					);
-				} else {
-					apiKeyInput?.setValue("");
-				}
+				// never decrypt a stored key into the form: leaving the field
+				// empty keeps the existing credential and avoids exposing it in
+				// the DOM or mixing it up between endpoints
+				apiKeyInput?.setValue("");
+				apiKeyInput?.setPlaceholder("Leave blank to keep the current key");
 			} else {
 				apiKeyInput?.setValue(entry.apiKey ?? "");
 			}

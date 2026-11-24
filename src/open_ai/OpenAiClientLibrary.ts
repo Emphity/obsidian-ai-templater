@@ -19,6 +19,7 @@ import {
 import { obsidianFetch } from "../api/obsidianFetch";
 import type { ApiProvider } from "../api/provider";
 import {
+	ANONYMOUS_API_KEY,
 	ANTHROPIC_OAUTH_BETA,
 	DEFAULT_ANTHROPIC_MAX_TOKENS,
 	isAnthropicOAuthKey,
@@ -128,7 +129,9 @@ export default class OpenAiApi {
 			defaultHeaders["x-opencode-session"] = sessionGuid;
 		}
 		return new OpenAI({
-			apiKey,
+			// the SDK rejects an empty key; the sentinel is removed later by
+			// obsidianFetch for unauthenticated endpoints
+			apiKey: apiKey || ANONYMOUS_API_KEY,
 			dangerouslyAllowBrowser: true,
 			fetch: obsidianFetch,
 			defaultHeaders,
@@ -155,23 +158,16 @@ export default class OpenAiApi {
 			options.authToken = apiKey;
 			defaultHeaders["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
 		} else {
-			options.apiKey = apiKey;
+			options.apiKey = apiKey || ANONYMOUS_API_KEY;
 		}
 		return new Anthropic(options);
 	};
 
-	// validates the effective request settings (API Key, Endpoint and Model)
-	validateSettings = (
-		apiKey: string,
-		baseURL: string,
-		model?: string | null,
-	): boolean => {
+	// validates the effective request settings. The API key is optional:
+	// unauthenticated endpoints (Ollama, LM Studio, ...) send no credentials.
+	validateSettings = (baseURL: string, model?: string | null): boolean => {
 		if (!baseURL) {
 			this.plugin.log("validateSettings", "endpoint is not set");
-			return false;
-		}
-		if (!apiKey) {
-			this.plugin.log("validateSettings", "apiKey is not set");
 			return false;
 		}
 		if (!model) {
@@ -194,10 +190,13 @@ export default class OpenAiApi {
 	): Promise<string> => {
 		const effectiveBaseURL = baseURL || this.plugin.settings.defaultEndpoint;
 
-		// resolve the API key: explicit argument wins, otherwise decrypt the
-		// stored key for the endpoint. A locked session blocks the request.
-		let effectiveApiKey = apiKey ?? null;
-		if (!effectiveApiKey) {
+		// resolve the API key: an explicit argument wins (including an empty
+		// string, which means "no credentials"), otherwise decrypt the stored
+		// key for this endpoint. A locked session blocks the request.
+		let effectiveApiKey: string | null = null;
+		if (apiKey !== undefined && apiKey !== null) {
+			effectiveApiKey = apiKey;
+		} else {
 			const decrypted = await this.plugin.decryptKeyFor(effectiveBaseURL);
 			if (decrypted === null) {
 				new Notice(
@@ -212,20 +211,17 @@ export default class OpenAiApi {
 		const requestModel = model ?? this.plugin.settings.defaultModel;
 		const provider = this.resolveProvider(effectiveBaseURL);
 
-		if (
-			!this.validateSettings(effectiveApiKey, effectiveBaseURL, requestModel)
-		) {
-			new Notice(
-				"Check your setting for valid API key, model and endpoint.",
-				10000,
-			);
+		if (!this.validateSettings(effectiveBaseURL, requestModel)) {
+			new Notice("Check your settings for a valid endpoint and model.", 10000);
 			return "";
 		}
 
+		// work on a copy: the caller may reuse the same messages array across
+		// requests and must not observe the injected/replaced system message
 		const messages: ChatCompletionMessageParam[] =
 			typeof promptOrMessages === "string"
 				? [{ role: "user", content: promptOrMessages }]
-				: promptOrMessages;
+				: [...promptOrMessages];
 
 		// check if messages contains a role of 'system' and if not, add it
 		if (!messages.find((message) => message.role === "system")) {
@@ -248,16 +244,20 @@ export default class OpenAiApi {
 		const jsonString = JSON.stringify(messages);
 		const characterCount = jsonString.length;
 
-		const maxCharacters = maxOutgoingCharacters
-			? maxOutgoingCharacters
-			: this.plugin.settings.defaultMaxOutgoingCharacters;
+		// only a valid positive number may tighten the configured guard
+		const maxCharacters =
+			typeof maxOutgoingCharacters === "number" &&
+			Number.isSafeInteger(maxOutgoingCharacters) &&
+			maxOutgoingCharacters > 0
+				? maxOutgoingCharacters
+				: this.plugin.settings.defaultMaxOutgoingCharacters;
 		if (characterCount > maxCharacters) {
 			new Notice(
 				`${this.plugin.APP_ABBREVIARTION}: Character count exceeds the limit of ${maxCharacters.toString()} for outgoing AI requests and the current character count is ${characterCount.toString()}. This setting can be changed in Settings or as part of the command.`,
 				15000,
 			);
 			this.plugin.log(
-				`chat', 'Character count exceeds limt. Defined limit is ${maxCharacters.toString()} and the current character count is ${characterCount.toString()}.`,
+				`chat: character count exceeds limit. Defined limit is ${maxCharacters.toString()} and the current character count is ${characterCount.toString()}.`,
 			);
 			return "";
 		}
@@ -389,8 +389,10 @@ export default class OpenAiApi {
 			return [];
 		}
 
-		let effectiveApiKey = apiKey ?? null;
-		if (!effectiveApiKey) {
+		let effectiveApiKey: string | null = null;
+		if (apiKey !== undefined && apiKey !== null) {
+			effectiveApiKey = apiKey;
+		} else {
 			const decrypted = await this.plugin.decryptKeyFor(effectiveBaseURL);
 			if (decrypted === null) {
 				new Notice(
@@ -413,11 +415,11 @@ export default class OpenAiApi {
 		// Anthropic native Models API: returns each model's max output tokens
 		// and context window, which are persisted for the max tokens cascade
 		if (this.resolveProvider(effectiveBaseURL) === "anthropic") {
-			const client = this.createAnthropicClient(
-				effectiveApiKey,
-				effectiveBaseURL,
-			);
 			try {
+				const client = this.createAnthropicClient(
+					effectiveApiKey,
+					effectiveBaseURL,
+				);
 				const models = await client.models.list();
 				const ids: string[] = [];
 				const limits: Record<string, ModelLimit> = {};
@@ -456,10 +458,9 @@ export default class OpenAiApi {
 			}
 		}
 
-		const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
-		openai.baseURL = effectiveBaseURL;
-
 		try {
+			const openai = this.createClient(effectiveApiKey, effectiveBaseURL);
+			openai.baseURL = effectiveBaseURL;
 			const models = await openai.models.list();
 
 			// persist the token limits the endpoint reports, if any

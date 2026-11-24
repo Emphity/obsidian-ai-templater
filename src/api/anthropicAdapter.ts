@@ -43,7 +43,9 @@ export const messagesToAnthropic = (
 	const converted: AnthropicSdk.MessageParam[] = [];
 
 	for (const message of messages) {
-		if (message.role === "system") {
+		// OpenAI's newer "developer" role carries instructions just like
+		// "system"; Anthropic expects both in its top-level system prompt
+		if (message.role === "system" || message.role === "developer") {
 			const text = textFromContent(message.content).trim();
 			if (text) {
 				systemParts.push(text);

@@ -30,6 +30,10 @@ export const providerForEndpoint = (
 // this fallback is sent so the request stays valid
 export const DEFAULT_ANTHROPIC_MAX_TOKENS = 4096;
 
+// sentinel used by the SDKs for endpoints that do not require authentication;
+// obsidianFetch removes the corresponding credential headers before sending
+export const ANONYMOUS_API_KEY = "ait-anonymous";
+
 // OAuth access tokens (created via claude.ai / claude code login) use the
 // Authorization header instead of x-api-key and need the oauth beta flag
 export const isAnthropicOAuthKey = (apiKey: string): boolean =>

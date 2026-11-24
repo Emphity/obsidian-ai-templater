@@ -16,6 +16,7 @@ import {
 } from "./settings/settings";
 import type { InternalModuleAit } from "./templater/InternalModuleAit";
 import {
+	detachTemplaterInternalModule,
 	initializeTemplaterInternalModule,
 	trackTemplater,
 } from "./templater/Templater";
@@ -33,7 +34,12 @@ const sanitizeLimits = (raw: unknown): Record<string, ModelLimit> => {
 			: undefined;
 	if (typeof raw === "object" && raw !== null) {
 		for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-			if (typeof key === "string" && key && typeof value === "object") {
+			if (
+				typeof key === "string" &&
+				key &&
+				typeof value === "object" &&
+				value !== null
+			) {
 				const limit = value as {
 					contextLength?: unknown;
 					maxCompletionTokens?: unknown;
@@ -110,7 +116,13 @@ export default class AitPlugin extends Plugin {
 	}
 
 	onunload() {
-		new Notice(`unloading ${this.APP_NAME}`);
+		// clear secrets and integration points so disabling the plugin cannot
+		// leave a working window.ait or Templater module behind
+		this.unlockKey = null;
+		detachTemplaterInternalModule(this);
+		if (window.ait?.plugin === this) {
+			delete window.ait;
+		}
 	}
 
 	async loadSettings(): Promise<void> {
@@ -119,6 +131,16 @@ export default class AitPlugin extends Plugin {
 		// 0 = auto (model maximum / omit the field); guard against invalid data
 		if (!Number.isFinite(this.settings.defaultMaxNumTokens)) {
 			this.settings.defaultMaxNumTokens = 0;
+		}
+
+		// the outgoing character guard must stay usable: NaN serializes as
+		// null and negative values would reject every request
+		if (
+			!Number.isSafeInteger(this.settings.defaultMaxOutgoingCharacters) ||
+			this.settings.defaultMaxOutgoingCharacters <= 0
+		) {
+			this.settings.defaultMaxOutgoingCharacters =
+				DEFAULT_SETTINGS.defaultMaxOutgoingCharacters;
 		}
 
 		const rawEndpoints: unknown = this.settings.savedEndpoints;
@@ -405,12 +427,22 @@ export default class AitPlugin extends Plugin {
 	}
 
 	// returns the decrypted key for the given endpoint, or null when the
-	// session is locked or the value cannot be decrypted
+	// session is locked or the value cannot be decrypted. Credentials are
+	// bound to their endpoint: an unknown URL never receives the key of the
+	// active endpoint. The legacy defaultApiKey is only consulted for the
+	// endpoint that is actually active.
 	async decryptKeyFor(endpoint: string): Promise<string | null> {
 		const entry = this.settings.savedEndpoints.find(
 			(item) => item.value === endpoint,
 		);
-		const apiKey = entry?.apiKey ?? this.settings.defaultApiKey;
+		let apiKey: string;
+		if (entry) {
+			apiKey = entry.apiKey;
+		} else if (endpoint && endpoint === this.settings.defaultEndpoint) {
+			apiKey = this.settings.defaultApiKey;
+		} else {
+			return "";
+		}
 		if (!apiKey) return "";
 		if (!isEncrypted(apiKey)) return apiKey; // plaintext (migration pending)
 		if (!this.unlockKey) return null;
@@ -474,7 +506,9 @@ export default class AitPlugin extends Plugin {
 
 	// resolves the max_completion_tokens value for a request using this
 	// cascade: explicit argument (template call) > manual setting (>0) >
-	// maximum detected for the model > 0 (= omit the field, provider default)
+	// output maximum detected for the model > 0 (= omit the field, provider
+	// default). contextLength is the whole context window, not an output
+	// limit, so it is deliberately not used as max_completion_tokens.
 	resolveMaxTokens(
 		explicit?: number | null,
 		baseURL?: string | null,
@@ -488,8 +522,7 @@ export default class AitPlugin extends Plugin {
 		const endpoint = baseURL || this.settings.defaultEndpoint;
 		const modelName = model ?? this.settings.defaultModel;
 		const list = savedModelListFor(this.settings.savedModels, endpoint);
-		const limit = list?.limits?.[modelName];
-		const detected = limit?.maxCompletionTokens ?? limit?.contextLength;
+		const detected = list?.limits?.[modelName]?.maxCompletionTokens;
 		return detected !== undefined && detected > 0 ? detected : 0;
 	}
 

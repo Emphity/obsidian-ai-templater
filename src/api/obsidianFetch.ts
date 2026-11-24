@@ -1,6 +1,10 @@
 // fetch implementation backed by Obsidian's requestUrl, which performs the
 // request from the main process and is not subject to CORS restrictions
 import { requestUrl } from "obsidian";
+import { ANONYMOUS_API_KEY } from "./provider";
+
+const isAnonymousAuthorization = (value: string | undefined): boolean =>
+	value === ANONYMOUS_API_KEY || value === `Bearer ${ANONYMOUS_API_KEY}`;
 
 export const obsidianFetch = async (
 	input: string | URL | Request,
@@ -21,6 +25,13 @@ export const obsidianFetch = async (
 		for (const [key, value] of new Headers(init.headers).entries()) {
 			headers[key] = value;
 		}
+	}
+	// unauthenticated requests must not carry a placeholder credential
+	if (isAnonymousAuthorization(headers.authorization)) {
+		delete headers.authorization;
+	}
+	if (headers["x-api-key"] === ANONYMOUS_API_KEY) {
+		delete headers["x-api-key"];
 	}
 	const response = await requestUrl({
 		url,
