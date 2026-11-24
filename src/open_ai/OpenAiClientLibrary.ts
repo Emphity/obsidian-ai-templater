@@ -359,9 +359,10 @@ export default class OpenAiApi {
 				((Platform.isMobile && this.plugin.settings.displayTokenUsageMobile) ??
 					false)
 			) {
+				// 0 keeps the usage notice visible until the user dismisses it
 				new Notice(
 					`${this.plugin.APP_ABBREVIARTION}: response received.\n${usageMessage}`,
-					8000,
+					0,
 				);
 			}
 
