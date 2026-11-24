@@ -1,3 +1,25 @@
+# 1.0.33
+### New
+- Stronger API key encryption: keys are encrypted with a vault-specific random salt (`enc:v2`). Existing `enc:v1` keys are decrypted on the next successful unlock and re-encrypted automatically.
+- Credentials are isolated per endpoint. Template calls cannot send the active endpoint's stored key to another endpoint, and an explicit empty API key means "send no credentials".
+- Endpoints that do not require authentication can run chats without an API key, in addition to fetching models (for example Ollama and LM Studio).
+- The selected model is remembered per endpoint. Switching endpoints restores that endpoint's model instead of reusing the previous one.
+- Model refresh now distinguishes manual and remote model ids. Manual models are preserved while remote models that no longer exist are removed.
+- SDK timeouts and AbortControllers now abort the request promise. Note: Obsidian's `requestUrl` cannot cancel the underlying network request after it has been sent.
+- Settings text fields persist on blur or when Settings closes, and list operations write settings once. Model lists are rendered only when opened.
+### No longer broken
+- The endpoint API type selector can now be used before saving and is no longer reset to auto.
+- The outgoing-character guard survives invalid or empty numeric input.
+- Template messages are no longer mutated when a chat is sent.
+- OpenAI `developer` messages are converted into Anthropic system instructions instead of being dropped.
+- Anthropic requests no longer use the full context-window length as an output token limit.
+- Renaming or removing endpoints/models keeps their cached models, selections and limits in sync.
+- Disabling or unloading the plugin clears `window.ait`, the Templater module, pending timers and the in-memory unlock key.
+### Internal
+- Reduced bundle size by minifying production builds.
+- Added reproducible installs with `package-lock.json`, pinned GitHub dependencies and full CI checks.
+- Added regression tests for encryption, settings migration, provider selection and adapters.
+
 # 1.0.32
 ### New
 - Anthropic compatibility: endpoints using the native Anthropic Messages API (Claude models) are now supported. The API type is auto-detected from the endpoint URL and can be forced per endpoint with the new "API type" selector in the endpoint editor (Auto-detect / OpenAI compatible / Anthropic). Model listing uses the native Models API and captures each model's max output tokens and context window; the max tokens cascade uses them automatically, falling back to 4096 when a model reports no limit. `max_tokens` is required by Anthropic. OAuth access tokens (`sk-ant-oat...`) are supported via the Authorization header.
