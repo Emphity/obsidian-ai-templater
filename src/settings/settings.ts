@@ -43,6 +43,9 @@ export interface SavedModelList {
 	// max tokens per model id entered manually in settings (informational,
 	// useful when the endpoint does not report the limits itself)
 	manualLimits?: Record<string, number>;
+	// model ids added by the user. A refresh replaces remote ids but preserves
+	// these. Existing caches are seeded with all model ids during migration.
+	manualModels?: string[];
 }
 
 // manual max tokens edited by the user for a model in settings, when any
@@ -74,6 +77,8 @@ export interface Settings {
 	displayTokenUsageDesktop?: boolean;
 	displayTokenUsageMobile?: boolean;
 	defaultSystemMessage: string;
+	// selected model per endpoint URL; defaultModel is the active value
+	selectedModels?: Record<string, string>;
 	// random PBKDF2 salt for the password-derived session key; it is not a
 	// secret and is generated once per vault
 	keySalt?: string;
@@ -88,6 +93,51 @@ export const savedModelListFor = (
 export const mergeModels = (...sourceLists: string[][]): string[] => [
 	...new Set(sourceLists.flat().filter(Boolean)),
 ];
+
+// keeps only string keys with non-empty string values
+export const sanitizeSelectedModels = (
+	raw: unknown,
+): Record<string, string> => {
+	const result: Record<string, string> = {};
+	if (typeof raw === "object" && raw !== null) {
+		for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+			if (
+				typeof key === "string" &&
+				key &&
+				typeof value === "string" &&
+				value
+			) {
+				result[key] = value;
+			}
+		}
+	}
+	return result;
+};
+
+export const selectedModelFor = (
+	settings: Settings,
+	endpoint: string,
+): string | undefined => settings.selectedModels?.[endpoint];
+
+// replaces a refresh's remote ids while preserving ids added manually
+export const replaceFetchedModels = (
+	manualModels: string[] | undefined,
+	fetchedModels: string[],
+): string[] => mergeModels(manualModels ?? [], fetchedModels);
+
+// tracks which values in the resulting model list were added by the user:
+// values already marked manual, plus values that did not exist in the old list
+export const refreshManualModels = (
+	oldModels: string[],
+	oldManualModels: string[] | undefined,
+	nextModels: string[],
+): string[] => {
+	const previousManual = new Set(oldManualModels ?? oldModels);
+	const previousModels = new Set(oldModels);
+	return nextModels.filter(
+		(value) => previousManual.has(value) || !previousModels.has(value),
+	);
+};
 
 // moves cached models/limits from an old endpoint URL to the renamed one. If
 // the target already exists, both caches are merged and the source is removed.
@@ -119,6 +169,12 @@ export const renameSavedModelList = (
 			...(target.manualLimits ?? {}),
 			...source.manualLimits,
 		};
+	}
+	if (source.manualModels) {
+		target.manualModels = mergeModels(
+			target.manualModels ?? [],
+			source.manualModels,
+		);
 	}
 	lists.splice(sourceIndex, 1);
 	return true;
@@ -157,6 +213,11 @@ export const renameModelData = (
 		list.manualLimits[to] = list.manualLimits[from] as number;
 		delete list.manualLimits[from];
 	}
+	if (list.manualModels?.includes(from)) {
+		list.manualModels = list.manualModels.map((model) =>
+			model === from ? to : model,
+		);
+	}
 	return true;
 };
 
@@ -177,6 +238,11 @@ export const removeModelData = (
 		const manualLimits = { ...list.manualLimits };
 		delete manualLimits[model];
 		list.manualLimits = manualLimits;
+	}
+	if (list.manualModels?.includes(model)) {
+		list.manualModels = list.manualModels.filter(
+			(candidate) => candidate !== model,
+		);
 	}
 	return true;
 };

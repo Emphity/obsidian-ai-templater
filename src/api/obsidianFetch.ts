@@ -1,10 +1,22 @@
 // fetch implementation backed by Obsidian's requestUrl, which performs the
-// request from the main process and is not subject to CORS restrictions
+// request from the main process and is not subject to CORS restrictions.
+// requestUrl has no native AbortSignal support, so cancellation is cooperative:
+// the fetch promise rejects promptly, but the underlying request cannot be
+// detached.
 import { requestUrl } from "obsidian";
 import { ANONYMOUS_API_KEY } from "./provider";
 
 const isAnonymousAuthorization = (value: string | undefined): boolean =>
 	value === ANONYMOUS_API_KEY || value === `Bearer ${ANONYMOUS_API_KEY}`;
+
+const abortError = (): Error => {
+	if (typeof DOMException === "function") {
+		return new DOMException("The request was aborted.", "AbortError");
+	}
+	const error = new Error("The request was aborted.");
+	error.name = "AbortError";
+	return error;
+};
 
 export const obsidianFetch = async (
 	input: string | URL | Request,
@@ -33,15 +45,55 @@ export const obsidianFetch = async (
 	if (headers["x-api-key"] === ANONYMOUS_API_KEY) {
 		delete headers["x-api-key"];
 	}
-	const response = await requestUrl({
+
+	const request = requestUrl({
 		url,
 		method: init?.method ?? "GET",
 		headers,
 		body: body as string | undefined,
 		throw: false,
 	});
-	return new Response(response.text, {
-		status: response.status,
-		headers: response.headers,
+	const signal = init?.signal;
+	if (!signal) {
+		const response = await request;
+		return new Response(response.text, {
+			status: response.status,
+			headers: response.headers,
+		});
+	}
+
+	// honor SDK timeouts and AbortController signals as soon as possible
+	return new Promise<Response>((resolve, reject) => {
+		let finished = false;
+		const onAbort = (): void => {
+			if (finished) return;
+			finished = true;
+			reject(abortError());
+		};
+		const cleanup = (): void => {
+			signal.removeEventListener("abort", onAbort);
+		};
+		if (signal.aborted) {
+			onAbort();
+			return;
+		}
+		signal.addEventListener("abort", onAbort, { once: true });
+		request
+			.then((response) => {
+				if (finished) return;
+				finished = true;
+				resolve(
+					new Response(response.text, {
+						status: response.status,
+						headers: response.headers,
+					}),
+				);
+			})
+			.catch((error: unknown) => {
+				if (finished) return;
+				finished = true;
+				reject(error);
+			})
+			.finally(cleanup);
 	});
 };

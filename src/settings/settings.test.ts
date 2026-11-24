@@ -4,12 +4,16 @@ import {
 	DEFAULT_SETTINGS,
 	manualMaxTokensFor,
 	mergeModels,
+	refreshManualModels,
 	removeModelData,
 	removeSavedModelList,
 	renameModelData,
 	renameSavedModelList,
+	replaceFetchedModels,
 	sanitizeApiType,
+	sanitizeSelectedModels,
 	savedModelListFor,
+	selectedModelFor,
 } from "./settings";
 
 describe("sanitizeApiType", () => {
@@ -168,5 +172,61 @@ describe("model annotation cleanup", () => {
 		expect(lists[0].models).toEqual(["old-model"]);
 		expect(lists[0].limits).toEqual({});
 		expect(lists[0].manualLimits).toEqual({});
+	});
+});
+
+describe("selected models and manual lists", () => {
+	it("sanitizes endpoint-to-model selections", () => {
+		const settings = {
+			...DEFAULT_SETTINGS,
+			selectedModels: {
+				"https://a.example": "model-a",
+				"https://empty.example": "",
+			},
+		};
+		const malformed = {
+			"https://a.example": "model-a",
+			"https://empty.example": "",
+			"https://bad.example": 123,
+		} as unknown as Record<string, unknown>;
+		expect(selectedModelFor(settings, "https://a.example")).toBe("model-a");
+		expect(sanitizeSelectedModels(malformed)).toEqual({
+			"https://a.example": "model-a",
+		});
+	});
+
+	it("replaces remote models and preserves manual ids", () => {
+		const models = replaceFetchedModels(["manual-model"], ["stale-remote"]);
+		expect(models).toEqual(["manual-model", "stale-remote"]);
+	});
+
+	it("tracks new manual ids and drops removed manual ids", () => {
+		const nextManual = refreshManualModels(
+			["remote-a", "remote-b", "manual-a"],
+			["manual-a"],
+			["remote-a", "new-manual", "manual-a"],
+		);
+		expect(nextManual).toEqual(["new-manual", "manual-a"]);
+	});
+
+	it("tracks a value as manual when the previous cache had no marker", () => {
+		const nextManual = refreshManualModels(["remote-a"], undefined, [
+			"remote-a",
+			"new-manual",
+		]);
+		expect(nextManual).toEqual(["remote-a", "new-manual"]);
+	});
+
+	it("keeps manual ids when an endpoint cache is renamed", () => {
+		const lists = [
+			{
+				endpoint: "https://old.example",
+				models: ["manual-model", "remote-model"],
+				manualModels: ["manual-model"],
+			},
+		];
+		renameSavedModelList(lists, "https://old.example", "https://new.example");
+		expect(lists[0].endpoint).toBe("https://new.example");
+		expect(lists[0].manualModels).toEqual(["manual-model"]);
 	});
 });

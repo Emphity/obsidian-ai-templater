@@ -15,6 +15,8 @@ import {
 	API_TYPE_OPTIONS,
 	manualMaxTokensFor,
 	mergeModels,
+	refreshManualModels,
+	replaceFetchedModels,
 	savedModelListFor,
 } from "./settings";
 
@@ -111,6 +113,16 @@ export class OWlSettingTab extends PluginSettingTab {
 			setValue: async (value) => {
 				this.plugin.settings.defaultEndpoint = value;
 				this.plugin.settings.defaultApiKey = this.apiKeyForEndpoint(value);
+				// switching endpoints restores that endpoint's saved model (or
+				// selects its first cached model) instead of reusing the old one
+				const endpointModels =
+					savedModelListFor(this.plugin.settings.savedModels, value)?.models ??
+					[];
+				const nextModel =
+					this.plugin.settings.selectedModels?.[value] ??
+					endpointModels[0] ??
+					"";
+				this.plugin.settings.defaultModel = nextModel;
 			},
 			getSavedEntries: () =>
 				this.plugin.settings.savedEndpoints.map((entry) => ({
@@ -160,6 +172,13 @@ export class OWlSettingTab extends PluginSettingTab {
 			getValue: () => this.plugin.settings.defaultModel,
 			setValue: async (value) => {
 				this.plugin.settings.defaultModel = value;
+				const endpoint = this.plugin.settings.defaultEndpoint || "";
+				this.plugin.settings.selectedModels ??= {};
+				if (value) {
+					this.plugin.settings.selectedModels[endpoint] = value;
+				} else {
+					delete this.plugin.settings.selectedModels[endpoint];
+				}
 			},
 			maxTokens: {
 				getFor: (model) =>
@@ -208,7 +227,16 @@ export class OWlSettingTab extends PluginSettingTab {
 			},
 			setSavedEntries: async (entries) => {
 				await this.updateModelListForActiveEndpoint((list) => {
-					list.models = entries.map((entry) => entry.value);
+					const oldModels = list.models;
+					const nextModels = entries.map((entry) => entry.value);
+					list.models = nextModels;
+					// the editable list preserves manually added ids; a refresh may
+					// remove remote ids that no longer exist
+					list.manualModels = refreshManualModels(
+						oldModels,
+						list.manualModels,
+						nextModels,
+					);
 				});
 			},
 		});
@@ -401,21 +429,34 @@ export class OWlSettingTab extends PluginSettingTab {
 
 		const modelLists = this.plugin.settings.savedModels ?? [];
 		const existing = savedModelListFor(modelLists, endpoint);
-		const models = existing
-			? mergeModels(existing.models, fetched.ids)
-			: [...new Set(fetched.ids)];
+		const manualModels = existing?.manualModels ?? existing?.models ?? [];
+		const models = replaceFetchedModels(manualModels, fetched.ids);
 		this.plugin.settings.savedModels = modelLists;
 		if (existing) {
 			existing.models = models;
 			existing.fetchedAt = Date.now();
+			existing.manualModels = manualModels;
 		} else {
-			modelLists.push({ endpoint, models, fetchedAt: Date.now() });
+			modelLists.push({
+				endpoint,
+				models,
+				fetchedAt: Date.now(),
+				manualModels,
+			});
 		}
 		if (
 			this.plugin.settings.defaultModel &&
 			!models.includes(this.plugin.settings.defaultModel)
 		) {
 			models.push(this.plugin.settings.defaultModel);
+			// keep the selected model available across future refreshes
+			const selectedList = savedModelListFor(modelLists, endpoint);
+			if (selectedList) {
+				selectedList.manualModels = mergeModels(
+					selectedList.manualModels ?? [],
+					[this.plugin.settings.defaultModel],
+				);
+			}
 		}
 
 		// models and reported limits are one user action and one settings write

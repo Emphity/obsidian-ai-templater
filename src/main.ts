@@ -16,6 +16,7 @@ import {
 	renameModelData,
 	renameSavedModelList,
 	sanitizeApiType,
+	sanitizeSelectedModels,
 	savedModelListFor,
 } from "./settings/settings";
 import type { InternalModuleAit } from "./templater/InternalModuleAit";
@@ -170,6 +171,9 @@ export default class AitPlugin extends Plugin {
 
 		const rawEndpoints = this.settings.savedEndpoints;
 		const endpoints: SavedEndpoint[] = [];
+		this.settings.selectedModels = sanitizeSelectedModels(
+			this.settings.selectedModels,
+		);
 		if (Array.isArray(rawEndpoints)) {
 			for (const raw of rawEndpoints) {
 				let value = "";
@@ -222,6 +226,7 @@ export default class AitPlugin extends Plugin {
 						fetchedAt?: unknown;
 						limits?: unknown;
 						manualLimits?: unknown;
+						manualModels?: unknown;
 					};
 					if (
 						typeof entry.endpoint === "string" &&
@@ -239,6 +244,18 @@ export default class AitPlugin extends Plugin {
 						const sanitizedManualLimits = sanitizeManualLimits(
 							entry.manualLimits,
 						);
+						// model ids persisted before the manual/remote distinction
+						// are seeded as manual so a refresh cannot delete them
+						const manualModels = Array.isArray(entry.manualModels)
+							? [
+									...new Set(
+										entry.manualModels.filter(
+											(model): model is string =>
+												typeof model === "string" && Boolean(model),
+										),
+									),
+								]
+							: models;
 						const hasExtraData =
 							Object.keys(sanitizedLimits).length > 0 ||
 							Object.keys(sanitizedManualLimits).length > 0;
@@ -257,6 +274,10 @@ export default class AitPlugin extends Plugin {
 											...sanitizedManualLimits,
 										}
 									: existing.manualLimits;
+								existing.manualModels = mergeModels(
+									existing.manualModels ?? existing.models,
+									manualModels,
+								);
 							}
 						} else {
 							modelLists.push({
@@ -270,6 +291,7 @@ export default class AitPlugin extends Plugin {
 									limits: sanitizedLimits,
 									manualLimits: sanitizedManualLimits,
 								}),
+								manualModels,
 							});
 						}
 					}
@@ -283,10 +305,16 @@ export default class AitPlugin extends Plugin {
 			);
 			if (existing) {
 				existing.models = mergeModels(existing.models, legacyModels);
+				existing.manualModels = mergeModels(
+					existing.manualModels ?? [],
+					legacyModels,
+				);
 			} else {
+				const legacyListModels = [...new Set(legacyModels)];
 				modelLists.push({
 					endpoint: legacyEndpoint,
-					models: [...new Set(legacyModels)],
+					models: legacyListModels,
+					manualModels: legacyListModels,
 				});
 			}
 		}
@@ -353,6 +381,32 @@ export default class AitPlugin extends Plugin {
 				activeList.models.push(this.settings.defaultModel);
 				settingsChanged = true;
 			}
+		}
+
+		// preserve the selected model separately for each endpoint. Existing
+		// settings fall back to the active default model.
+		const activeEndpointKey = this.settings.defaultEndpoint || "";
+		const activeEndpointModels =
+			savedModelListFor(modelLists, activeEndpointKey)?.models ?? [];
+		const activeModel =
+			this.settings.selectedModels?.[activeEndpointKey] ??
+			this.settings.defaultModel ??
+			activeEndpointModels[0] ??
+			"";
+		if (activeModel && !activeEndpointModels.includes(activeModel)) {
+			activeEndpointModels.push(activeModel);
+			settingsChanged = true;
+		}
+		if (this.settings.defaultModel !== activeModel) {
+			this.settings.defaultModel = activeModel;
+			settingsChanged = true;
+		}
+		if (
+			activeModel &&
+			this.settings.selectedModels[activeEndpointKey] !== activeModel
+		) {
+			this.settings.selectedModels[activeEndpointKey] = activeModel;
+			settingsChanged = true;
 		}
 
 		if (settingsChanged) {
@@ -638,6 +692,11 @@ export default class AitPlugin extends Plugin {
 	renameEndpointData(from: string, to: string): void {
 		if (!from || !to || from === to) return;
 		renameSavedModelList(this.settings.savedModels, from, to);
+		const selectedModels = this.settings.selectedModels ?? {};
+		if (selectedModels[from] !== undefined) {
+			selectedModels[to] = selectedModels[from];
+			delete selectedModels[from];
+		}
 		if (this.settings.defaultEndpoint === from) {
 			this.settings.defaultEndpoint = to;
 			this.settings.defaultApiKey =
@@ -650,6 +709,9 @@ export default class AitPlugin extends Plugin {
 	// selection falls back to the caller-provided next endpoint.
 	removeEndpointData(endpoint: string, nextEndpoint = ""): void {
 		removeSavedModelList(this.settings.savedModels, endpoint);
+		if (this.settings.selectedModels) {
+			delete this.settings.selectedModels[endpoint];
+		}
 		if (this.settings.defaultEndpoint === endpoint) {
 			this.settings.defaultEndpoint = nextEndpoint;
 			this.settings.defaultApiKey =
@@ -662,11 +724,18 @@ export default class AitPlugin extends Plugin {
 	// moves a model's informational/detected annotations after a rename
 	renameModelData(endpoint: string, from: string, to: string): void {
 		renameModelData(this.settings.savedModels, endpoint, from, to);
+		const selectedModels = this.settings.selectedModels;
+		if (selectedModels?.[endpoint] === from) {
+			selectedModels[endpoint] = to;
+		}
 	}
 
 	// removes a model's informational/detected annotations
 	removeModelData(endpoint: string, model: string): void {
 		removeModelData(this.settings.savedModels, endpoint, model);
+		if (this.settings.selectedModels?.[endpoint] === model) {
+			delete this.settings.selectedModels[endpoint];
+		}
 	}
 
 	// resolves the max_completion_tokens value for a request using this
