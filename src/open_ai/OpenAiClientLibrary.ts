@@ -275,10 +275,6 @@ export default class OpenAiApi {
 			model ?? null,
 		);
 
-		const progressNotice = new Notice(
-			`${this.plugin.APP_ABBREVIARTION} is working…`,
-			0,
-		);
 		try {
 			let completion: SimpleChatCompletion;
 			let rawResponse: unknown;
@@ -376,8 +372,6 @@ export default class OpenAiApi {
 				20000,
 			);
 			return "";
-		} finally {
-			progressNotice.hide();
 		}
 	};
 
