@@ -84,34 +84,57 @@
 	padding: 15px;
 }
 
-/* Spinkit https://github.com/tobiasahlin/SpinKit?tab=readme-ov-file */
-.ait-spinner {
-	width: 20px;
-	position: absolute;
-	right: 10px;
+/* Working indicator */
+.ait-working {
+	position: fixed;
+	right: 20px;
+	bottom: 48px;
+	z-index: var(--layer-status-bar, 30);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 7px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	box-shadow: var(--shadow-s);
+	font-size: var(--font-ui-small);
 }
 
-.ait-spinner>div {
-	width: 20px;
-	height: 10px;
+.ait-working-dots {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+
+.ait-working-dot {
+	width: 6px;
+	height: 6px;
 	background-color: var(--background-modifier-border-focus);
-	border-radius: 30%;
-	animation: oil-sk-bouncedelay 1.4s infinite ease-in-out both;
+	border-radius: 50%;
+	animation: ait-working-bouncedelay 1.4s infinite ease-in-out both;
 }
 
-.ait-spinner .oil-bounce {
+.ait-working-dot {
 	animation-delay: var(--bounce-delay);
 }
 
-@keyframes oil-sk-bouncedelay {
+.ait-working-label {
+	user-select: none;
+}
+
+@keyframes ait-working-bouncedelay {
 
 	0%,
 	80%,
 	100% {
-		transform: scale(0);
+		opacity: 0.25;
+		transform: scale(0.75);
 	}
 
 	40% {
+		opacity: 1;
 		transform: scale(1);
 	}
 }

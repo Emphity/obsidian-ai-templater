@@ -1,5 +1,6 @@
-// creates and removes a visual indicator element that is appended to the active workspace leaf's view header
-// provides user feedback that the plugin is working on a AI task
+// creates and removes a visual indicator for long-running AI tasks. It uses a
+// fixed overlay so it remains visible even when the active editor is changed
+// or closed while the request is running.
 
 class ActivityIndicator {
 	private spinner: HTMLElement | null = null;
@@ -7,33 +8,36 @@ class ActivityIndicator {
 
 	add(): void {
 		// built with standard DOM APIs and fully wrapped: the spinner is
-		// cosmetic and must never break a chat call (Obsidian's
-		// Document.createDiv helper has shown version-dependent append
-		// behavior that can abort template runs)
+		// cosmetic and must never break a chat call
 		try {
+			this.remove();
 			const spinner = activeDocument.createElement("div");
-			spinner.className = "ait-spinner";
+			spinner.className = "ait-working";
 
-			// Create the child divs
-			const bounceDelays = ["-0.42s", "-0.36s", "-0.16s", "0s"];
+			const dots = activeDocument.createElement("div");
+			dots.className = "ait-working-dots";
+			const bounceDelays = ["-0.32s", "-0.24s", "-0.16s", "-0.08s", "0s"];
 			for (const delay of bounceDelays) {
 				const bounce = activeDocument.createElement("div");
-				bounce.className = "oil-bounce";
+				bounce.className = "ait-working-dot";
 				bounce.style.setProperty("--bounce-delay", delay);
-				spinner.appendChild(bounce);
+				dots.appendChild(bounce);
 			}
 
-			// Append the spinner to the active workspace leaf's view header
-			const activeViewHeader = activeDocument.querySelector(
-				".workspace-leaf.mod-active .cm-scroller",
-			);
-			if (activeViewHeader) activeViewHeader.after(spinner);
+			const label = activeDocument.createElement("span");
+			label.className = "ait-working-label";
+			label.textContent = "AIT is working…";
+
+			spinner.appendChild(dots);
+			spinner.appendChild(label);
+			activeDocument.body.appendChild(spinner);
 			this.spinner = spinner;
 
-			// Remove the spinner after a brief period in case the task gets stuck
+			// Remove the spinner if a task gets stuck; normal removal happens
+			// as soon as the template call settles.
 			this.timerId = activeWindow.setTimeout(() => {
 				this.remove();
-			}, 120000);
+			}, 300000);
 		} catch (error) {
 			console.log("ActivityIndicator: failed to attach spinner", error);
 		}
@@ -41,7 +45,7 @@ class ActivityIndicator {
 
 	remove(): void {
 		// Clear the timer if it's still running
-		if (this.timerId) {
+		if (this.timerId !== null) {
 			activeWindow.clearTimeout(this.timerId);
 			this.timerId = null;
 		}

@@ -340,8 +340,7 @@ export class OWlSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Display token usage on desktop")
 			.setDesc(
-				`Displays the number of tokens used a notification on the desktop. Message format is prompt 
-        tokens/completion tokens/total tokens. So it will look something like:  45/100/145.`,
+				`Shows a readable notification on desktop after each response: tokens sent, tokens received, total tokens and characters sent.`,
 			)
 			.addToggle((cb: ToggleComponent) => {
 				cb.setValue(this.plugin.settings.displayTokenUsageDesktop ?? false);
@@ -353,9 +352,7 @@ export class OWlSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Display token usage on mobile")
-			.setDesc(
-				"Displays the  number of tokens used a notification on the mobile.",
-			)
+			.setDesc("Shows the same readable token usage notification on mobile.")
 			.addToggle((cb: ToggleComponent) => {
 				cb.setValue(this.plugin.settings.displayTokenUsageMobile ?? false);
 				cb.onChange(async (value: boolean) => {

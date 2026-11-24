@@ -94,12 +94,12 @@ export class InternalModuleAit extends InternalModule {
 						apiKey,
 						organization,
 					)) ?? "No result";
-				spinner.remove();
 				return result;
 			} catch (error) {
 				console.log("Error in generate_run_chat", error);
-				spinner.remove();
 				return "";
+			} finally {
+				spinner.remove();
 			}
 		};
 	}

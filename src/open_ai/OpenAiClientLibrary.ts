@@ -254,7 +254,9 @@ export default class OpenAiApi {
 				: this.plugin.settings.defaultMaxOutgoingCharacters;
 		if (characterCount > maxCharacters) {
 			new Notice(
-				`${this.plugin.APP_ABBREVIARTION}: Character count exceeds the limit of ${maxCharacters.toString()} for outgoing AI requests and the current character count is ${characterCount.toString()}. This setting can be changed in Settings or as part of the command.`,
+				`${this.plugin.APP_ABBREVIARTION}: the request is too large.\n` +
+					`Characters: ${characterCount.toString()} of ${maxCharacters.toString()} allowed.\n` +
+					`Lower the amount of text, or raise "Max characters per outgoing request".`,
 				15000,
 			);
 			this.plugin.log(
@@ -273,6 +275,10 @@ export default class OpenAiApi {
 			model ?? null,
 		);
 
+		const progressNotice = new Notice(
+			`${this.plugin.APP_ABBREVIARTION} is working…`,
+			0,
+		);
 		try {
 			let completion: SimpleChatCompletion;
 			let rawResponse: unknown;
@@ -346,6 +352,10 @@ export default class OpenAiApi {
 				this.plugin.log("chat", logMessage);
 			}
 
+			const usage = completion.usage;
+			const usageMessage = usage
+				? this.formatTokenUsage(usage, characterCount)
+				: `Characters sent: ${characterCount.toString()}`;
 			if (
 				((Platform.isDesktop &&
 					this.plugin.settings.displayTokenUsageDesktop) ??
@@ -353,14 +363,10 @@ export default class OpenAiApi {
 				((Platform.isMobile && this.plugin.settings.displayTokenUsageMobile) ??
 					false)
 			) {
-				const usage = completion.usage;
-				if (usage) {
-					const displayMessage =
-						`${this.plugin.APP_ABBREVIARTION}:\n` +
-						`Tokens: ${usage.prompt_tokens.toString()}/${usage.completion_tokens.toString()}/${usage.total_tokens.toString()}\n` +
-						`Character count: ${characterCount.toString()}`;
-					new Notice(displayMessage, 8000);
-				}
+				new Notice(
+					`${this.plugin.APP_ABBREVIARTION}: response received.\n${usageMessage}`,
+					8000,
+				);
 			}
 
 			return completion.content ? completion.content : "";
@@ -370,8 +376,27 @@ export default class OpenAiApi {
 				20000,
 			);
 			return "";
+		} finally {
+			progressNotice.hide();
 		}
 	};
+
+	// Formats usage without the opaque prompt/completion/total notation.
+	private formatTokenUsage(
+		usage: {
+			prompt_tokens: number;
+			completion_tokens: number;
+			total_tokens: number;
+		},
+		characterCount: number,
+	): string {
+		return [
+			`Sent: ${usage.prompt_tokens.toLocaleString()} tokens`,
+			`Received: ${usage.completion_tokens.toLocaleString()} tokens`,
+			`Total: ${usage.total_tokens.toLocaleString()} tokens`,
+			`Characters sent: ${characterCount.toLocaleString()}`,
+		].join("\n");
+	}
 
 	// resolve the API key for the model list: explicit argument wins,
 	// otherwise decrypt the stored key. Locked sessions just omit the key
