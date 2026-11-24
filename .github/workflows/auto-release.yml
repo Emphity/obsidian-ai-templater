@@ -19,9 +19,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: auto-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   bump_tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,11 +34,15 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "21.x"
+          node-version: "22.x"
       - name: Determine whether to bump
         id: gate
         run: |
           set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.force_bump }}" == "true" ]]; then
+            echo "should_bump=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
             if [[ "${{ github.event.pull_request.merged }}" != "true" ]]; then
               echo "should_bump=false" >> "$GITHUB_OUTPUT"
@@ -43,7 +52,7 @@ jobs:
               echo "should_bump=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            if [[ "${{ github.event.pull_request.merged_by.login }}" != "app/github-actions" ]]; then
+            if [[ "${{ github.event.pull_request.merged_by.login }}" != "github-actions[bot]" ]]; then
               echo "should_bump=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -65,10 +74,6 @@ jobs:
               exit 0
               ;;
           esac
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.force_bump }}" == "true" ]]; then
-            echo "should_bump=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           base="${{ github.event.before }}"
           if [[ -z "$base" || "$base" == "0000000000000000000000000000000000000000" ]]; then
             base="$(git rev-parse HEAD^)"
@@ -114,21 +119,38 @@ jobs:
             cat CHANGELOG.md
           } > "$changelog_tmp"
           mv "$changelog_tmp" CHANGELOG.md
+
+          # build and validate before making the version/tag public
+          npm install
+          npm run build
+          package_version="$(node -p "require('./package.json').version")"
+          manifest_version="$(node -p "require('./manifest.json').version")"
+          manifest_min_app="$(node -p "require('./manifest.json').minAppVersion")"
+          versions_min_app="$(node -p "require('./versions.json')['${package_version}']")"
+          test "$package_version" = "$version"
+          test "$manifest_version" = "$version"
+          test "$versions_min_app" = "$manifest_min_app"
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json manifest.json versions.json CHANGELOG.md
+          git add package.json manifest.json versions.json CHANGELOG.md main.js
           git commit -m "chore(release): v${version}"
           git tag -a "${version}" -m "${version}"
           git push origin HEAD:main --tags
-      - name: Build and create release
+      - name: Create release
         if: steps.gate.outputs.should_bump == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          npm install
-          npm run build
           version="$(node -p "require('./package.json').version")"
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
           gh release create "${version}" \
+            --verify-tag \
             --title="${version}" \
-            build/main.js manifest.json styles.css
+            main.js manifest.json styles.css

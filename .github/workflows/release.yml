@@ -2,30 +2,60 @@ name: Release Obsidian plugin
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (for example 1.0.33)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
 
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '21.x'
+          node-version: "22.x"
+
+      - name: Validate release metadata
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./package.json').version")"
+          manifest_version="$(node -p "require('./manifest.json').version")"
+          versions_min_app="$(node -p "require('./versions.json')['${package_version}']")"
+          manifest_min_app="$(node -p "require('./manifest.json').minAppVersion")"
+
+          test -n "$TAG"
+          test "$package_version" = "$TAG"
+          test "$manifest_version" = "$TAG"
+          test "$versions_min_app" = "$manifest_min_app"
 
       - name: Build plugin
         run: |
           npm install
           npm run build
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
 
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-
-          gh release create "$tag" \
-            --title="$tag" \
-            build/main.js manifest.json styles.css
+          gh release create "$TAG" \
+            --verify-tag \
+            --title="$TAG" \
+            main.js manifest.json styles.css
