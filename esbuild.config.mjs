@@ -15,8 +15,12 @@ const deployDir = process.env.AIT_OUT_DIR;
 const deployPlugin = {
 	name: "ait-deploy",
 	setup(build) {
-		build.onEnd(() => {
+		build.onEnd((result) => {
 			if (!deployDir) return;
+			if (result.errors.length > 0) {
+				console.log("AIT deploy: skipped because the build has errors");
+				return;
+			}
 			if (!fs.existsSync(deployDir)) {
 				console.log(`AIT deploy: target directory not found: ${deployDir}`);
 				return;
@@ -68,6 +72,9 @@ const context = await esbuild.context({
 	target: "es2018",
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
+	// production is distributed as the tracked main.js; minify reduces both
+	// release size and plugin startup parsing cost
+	minify: prod,
 	treeShaking: true,
 	outfile: "main.js",
 });
@@ -75,6 +82,8 @@ const context = await esbuild.context({
 if (prod) {
 	console.log("Building for production");
 	await context.rebuild();
+	// let the esbuild service shut down cleanly before Node exits
+	await context.dispose();
 	process.exit(0);
 } else {
 	await context.watch();
