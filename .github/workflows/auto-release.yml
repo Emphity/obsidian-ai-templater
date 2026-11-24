@@ -123,6 +123,9 @@ jobs:
 
           # build and validate before making the version/tag public
           npm ci
+          npm run typecheck
+          npm run lint
+          npm test
           npm run build
           package_version="$(node -p "require('./package.json').version")"
           manifest_version="$(node -p "require('./manifest.json').version")"

@@ -46,6 +46,9 @@ jobs:
       - name: Build plugin
         run: |
           npm ci
+          npm run typecheck
+          npm run lint
+          npm test
           npm run build
           test -s main.js
           test -s manifest.json

@@ -8,6 +8,7 @@
 		"build": "node esbuild.config.mjs production",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"lint": "biome check ./src",
+		"test": "vitest run",
 		"version": "node version-bump.mjs",
 		"githubaction": "node version-github-action.mjs",
 		"dev:vault": "AIT_OUT_DIR=/mnt/Cosas/Programas/obs/test/test/.obsidian/plugins/obsidian-ai-templater node esbuild.config.mjs"
@@ -28,7 +29,8 @@
 		"obsidian": "1.12.3",
 		"templater-obsidian": "github:SilentVoid13/Templater#006dc61f64902dc9c72cad15c26b988576339719",
 		"tslib": "^2.8.1",
-		"typescript": "6.0.2"
+		"typescript": "6.0.2",
+		"vitest": "^5.1.1"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.128.0",
